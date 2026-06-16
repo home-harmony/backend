@@ -1,0 +1,34 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition = "2024"
+description = "FamilyLedger — shared Axum middleware, JWT validation, response types, and error mapping."
+
+[dependencies]
+domain = { path = "../domain" }
+
+# ── HTTP ───────────────────────────────────────────────────────────────────────
+axum = { workspace = true }
+lambda_http = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# ── Auth / JWT ─────────────────────────────────────────────────────────────────
+jsonwebtoken = { workspace = true }
+
+# ── Async runtime ─────────────────────────────────────────────────────────────
+tokio = { workspace = true }
+
+# ── Serialization ─────────────────────────────────────────────────────────────
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# ── Domain types ──────────────────────────────────────────────────────────────
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# ── Error handling ────────────────────────────────────────────────────────────
+thiserror = { workspace = true }
+
+# ── Observability ─────────────────────────────────────────────────────────────
+tracing = { workspace = true }

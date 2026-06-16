@@ -1,0 +1,60 @@
+[workspace]
+members = ["domain", "infrastructure", "api", "lambdas/migrate_runner"]
+resolver = "2"
+
+# ─── Workspace-level dependency versions ──────────────────────────────────────
+# Define versions here once; crates opt-in with `dep-name.workspace = true`.
+# This prevents version mismatches between crates.
+[workspace.dependencies]
+
+# ── Async runtime ─────────────────────────────────────────────────────────────
+tokio = { version = "1", features = ["full"] }
+
+# ── Database ──────────────────────────────────────────────────────────────────
+sqlx = { version = "0.9.0", features = [
+    "postgres",
+    "runtime-tokio-rustls",
+    "macros",
+    "migrate",
+    "uuid",
+    "chrono",
+    "rust_decimal",
+] }
+aurora-dsql-sqlx-connector = { version = "0.2.1", features = ["pool", "occ"] }
+
+# ── Domain types ──────────────────────────────────────────────────────────────
+# rust_decimal: float-free exact decimal arithmetic for money.
+# RULE: Money is ALWAYS rust_decimal::Decimal, never f64/f32.
+rust_decimal = { version = "1", features = ["serde-with-str"] }
+rust_decimal_macros = "1"
+
+# uuid: v4 for most PKs, v7 for transaction IDs (time-sortable → keyset pagination).
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+
+# ── Date/time ─────────────────────────────────────────────────────────────────
+chrono = { version = "0.4", features = ["serde"] }
+
+# ── Serialization ─────────────────────────────────────────────────────────────
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ── HTTP / Lambda ─────────────────────────────────────────────────────────────
+axum = { version = "0.8.9", features = ["macros"] }
+lambda_http = "1.2.1"
+lambda_runtime = "1.2.1"
+tower = "0.5"
+tower-http = { version = "0.7.0", features = ["trace", "cors"] }
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+jsonwebtoken = "10.4.0"
+
+# ── Observability ─────────────────────────────────────────────────────────────
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# ── Error handling ────────────────────────────────────────────────────────────
+thiserror = "2.0.18"
+anyhow = "1.0.82"
+
+# ── Base64 (cursor encoding for keyset pagination) ────────────────────────────
+base64 = "0.22"

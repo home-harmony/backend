@@ -1,0 +1,39 @@
+[package]
+name = "infrastructure"
+version = "0.1.0"
+edition = "2024"
+description = "FamilyLedger — database repositories, external service adapters, and I/O wrappers."
+
+[dependencies]
+domain = { path = "../domain" }
+
+# ── Database ───────────────────────────────────────────────────────────────────
+sqlx = { workspace = true }
+aurora-dsql-sqlx-connector = { workspace = true }
+
+# ── Async runtime ─────────────────────────────────────────────────────────────
+tokio = { workspace = true }
+
+# ── Serialization ─────────────────────────────────────────────────────────────
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# ── Domain types ──────────────────────────────────────────────────────────────
+rust_decimal = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# ── Error handling ────────────────────────────────────────────────────────────
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# ── Base64 for cursor encoding ────────────────────────────────────────────────
+base64 = { workspace = true }
+
+# ── Observability ─────────────────────────────────────────────────────────────
+tracing = { workspace = true }
+
+[dev-dependencies]
+# DB integration tests run against a real PostgreSQL via testcontainers.
+# RULE (GEMINI.md §15): Do NOT mock database behavior in integration layers.
+tokio = { workspace = true }

@@ -1,0 +1,22 @@
+# Rust build artifacts
+/target/
+
+# SQLx offline query cache (commit this to enable CI without a live DB)
+# Uncomment to ignore if you prefer not to commit it:
+# .sqlx/
+
+# cargo-lambda build output
+.aws-sam/
+
+# Local environment overrides
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Windows
+Thumbs.db
+desktop.ini
