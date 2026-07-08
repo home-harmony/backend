@@ -58,3 +58,6 @@ anyhow = "1.0.82"
 
 # ── Base64 (cursor encoding for keyset pagination) ────────────────────────────
 base64 = "0.22"
+
+# ── Value objects (strongly-typed primitives with built-in validation) ─────────
+nutype = { version = "0.7", features = ["serde"] }

@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::{
     errors::DomainError,
     events::DomainEvent,
-    value_objects::{CurrencyCode, Role},
+    value_objects::{CurrencyCode, DisplayName, FamilyName, Role},
 };
 
 // ─── Family Aggregate Root ────────────────────────────────────────────────────
@@ -29,7 +29,8 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Family {
     pub id: Uuid,
-    pub name: String,
+    /// Validated, trimmed family name (1–100 chars). Enforced by [`FamilyName`].
+    pub name: FamilyName,
     pub home_currency: CurrencyCode,
     pub created_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -41,17 +42,16 @@ pub struct Family {
 impl Family {
     /// Creates a new family with the founding owner.
     ///
+    /// Both `name` and `owner_display_name` are validated value objects —
+    /// construction is rejected at the call site before reaching this method.
+    ///
     /// Returns the new `Family` and the `FamilyCreated` + `MemberJoined` events.
     pub fn create(
-        name: String,
+        name: FamilyName,
         home_currency: CurrencyCode,
         owner_user_id: Uuid,
-        owner_display_name: String,
+        owner_display_name: DisplayName,
     ) -> Result<(Self, Vec<DomainEvent>), DomainError> {
-        if name.trim().is_empty() {
-            return Err(DomainError::FamilyNameEmpty);
-        }
-
         let now = Utc::now();
         let family_id = Uuid::new_v4();
         let owner_member_id = Uuid::new_v4();
@@ -60,7 +60,7 @@ impl Family {
             id: owner_member_id,
             family_id,
             user_id: owner_user_id,
-            display_name: owner_display_name.clone(),
+            display_name: owner_display_name,
             role: Role::Owner,
             relationship: None,
             joined_at: now,
@@ -80,7 +80,7 @@ impl Family {
         let events = vec![
             DomainEvent::FamilyCreated {
                 family_id,
-                name,
+                name: name.into_inner(),
                 home_currency: home_currency.to_string(),
                 occurred_at: now,
             },
@@ -139,11 +139,14 @@ impl Family {
     }
 
     /// Accepts an invite token and adds the user as a new member.
+    ///
+    /// `display_name` is a validated value object — empty or whitespace-only
+    /// names are rejected by [`DisplayName`] before this call is reached.
     pub fn accept_invite(
         &mut self,
         token_str: &str,
         user_id: Uuid,
-        display_name: String,
+        display_name: DisplayName,
     ) -> Result<(FamilyMember, Vec<DomainEvent>), DomainError> {
         let now = Utc::now();
 
@@ -291,7 +294,8 @@ pub struct FamilyMember {
     pub family_id: Uuid,
     /// Cognito `sub` — the user's permanent identifier from JWT claims.
     pub user_id: Uuid,
-    pub display_name: String,
+    /// Validated, trimmed display name (1–80 chars). Enforced by [`DisplayName`].
+    pub display_name: DisplayName,
     pub role: Role,
     /// Optional label for `Role::Other` members (e.g., "Grandma", "Cousin").
     pub relationship: Option<String>,
@@ -330,25 +334,30 @@ mod tests {
     fn make_family() -> (Family, Uuid) {
         let owner_id = Uuid::new_v4();
         let currency = CurrencyCode::new("USD").unwrap();
-        let (family, _) =
-            Family::create("Test Family".to_string(), currency, owner_id, "Alice".to_string())
-                .unwrap();
+        let name = FamilyName::try_new("Test Family").unwrap();
+        let owner_name = DisplayName::try_new("Alice").unwrap();
+        let (family, _) = Family::create(name, currency, owner_id, owner_name).unwrap();
         (family, owner_id)
     }
 
     #[test]
     fn family_create_succeeds() {
         let (family, _) = make_family();
-        assert_eq!(family.name, "Test Family");
+        assert_eq!(family.name.as_ref(), "Test Family");
         assert_eq!(family.members.len(), 1);
         assert_eq!(family.members[0].role, Role::Owner);
     }
 
     #[test]
-    fn empty_name_is_rejected() {
-        let currency = CurrencyCode::new("USD").unwrap();
-        let result = Family::create("  ".to_string(), currency, Uuid::new_v4(), "Alice".to_string());
-        assert!(matches!(result, Err(DomainError::FamilyNameEmpty)));
+    fn family_name_empty_is_rejected_by_value_object() {
+        assert!(FamilyName::try_new("").is_err());
+        assert!(FamilyName::try_new("  ").is_err());
+    }
+
+    #[test]
+    fn display_name_empty_is_rejected_by_value_object() {
+        assert!(DisplayName::try_new("").is_err());
+        assert!(DisplayName::try_new("  ").is_err());
     }
 
     #[test]
@@ -360,8 +369,9 @@ mod tests {
             .create_invite(owner_id, Role::Member, None, 48)
             .unwrap();
         let member_user_id = Uuid::new_v4();
-        let (member, _) = family
-            .accept_invite(&invite.token, member_user_id, "Bob".to_string())
+        let member_name = DisplayName::try_new("Bob").unwrap();
+        let (_, _) = family
+            .accept_invite(&invite.token, member_user_id, member_name)
             .unwrap();
 
         // Member tries to invite — should fail
@@ -374,8 +384,16 @@ mod tests {
         let (mut family, owner_id) = make_family();
         let (invite, _) = family.create_invite(owner_id, Role::Member, None, 48).unwrap();
 
-        let _ = family.accept_invite(&invite.token, Uuid::new_v4(), "Bob".to_string());
-        let result = family.accept_invite(&invite.token, Uuid::new_v4(), "Carol".to_string());
+        let _ = family.accept_invite(
+            &invite.token,
+            Uuid::new_v4(),
+            DisplayName::try_new("Bob").unwrap(),
+        );
+        let result = family.accept_invite(
+            &invite.token,
+            Uuid::new_v4(),
+            DisplayName::try_new("Carol").unwrap(),
+        );
 
         assert!(matches!(result, Err(DomainError::TokenAlreadyUsed)));
     }
@@ -405,7 +423,11 @@ mod tests {
         let (invite, _) = family.create_invite(owner_id, Role::Member, None, 48).unwrap();
         let member_user_id = Uuid::new_v4();
         let (member, _) = family
-            .accept_invite(&invite.token, member_user_id, "Bob".to_string())
+            .accept_invite(
+                &invite.token,
+                member_user_id,
+                DisplayName::try_new("Bob").unwrap(),
+            )
             .unwrap();
 
         family.remove_member(owner_id, member.id).unwrap();
@@ -419,8 +441,9 @@ mod tests {
     fn family_create_emits_two_events() {
         let owner_id = Uuid::new_v4();
         let currency = CurrencyCode::new("MDL").unwrap();
-        let (_, events) =
-            Family::create("My Family".to_string(), currency, owner_id, "Ana".to_string()).unwrap();
+        let name = FamilyName::try_new("My Family").unwrap();
+        let owner_name = DisplayName::try_new("Ana").unwrap();
+        let (_, events) = Family::create(name, currency, owner_id, owner_name).unwrap();
 
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], DomainEvent::FamilyCreated { .. }));

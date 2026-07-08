@@ -17,8 +17,11 @@ pub enum DomainError {
     InvalidCurrencyCode { code: String },
 
     // ── Family ────────────────────────────────────────────────────────────────
-    #[error("Family name cannot be empty")]
-    FamilyNameEmpty,
+    #[error("Invalid family name: {reason}")]
+    InvalidFamilyName { reason: String },
+
+    #[error("Invalid display name: {reason}")]
+    InvalidDisplayName { reason: String },
 
     #[error("Family already has an owner and cannot have a second one")]
     DuplicateOwner,
