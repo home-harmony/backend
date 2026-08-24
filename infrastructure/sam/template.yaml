@@ -1,0 +1,208 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: "FamilyLedger — Core serverless infrastructure (Cognito, API Gateway, S3, CloudFront)"
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment name
+
+  CognitoCallbackUrl:
+    Type: String
+    Default: http://localhost:4200/auth/callback
+    Description: URL that Cognito redirects to after login.
+
+  CognitoLogoutUrl:
+    Type: String
+    Default: http://localhost:4200/auth/logout
+    Description: URL that Cognito redirects to after logout.
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Architectures: [arm64]
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+
+Resources:
+  # ─── Cognito User Pool ───────────────────────────────────────────────────────
+  FamilyLedgerUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "familyledger-users-${Environment}"
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailSubject: "Your FamilyLedger verification code"
+        EmailMessage: "Your verification code is {####}"
+      UserPoolAddOns:
+        AdvancedSecurityMode: AUDIT
+      Schema:
+        - Name: family_id
+          AttributeDataType: String
+          Mutable: true
+        - Name: family_role
+          AttributeDataType: String
+          Mutable: true
+
+  # ─── Cognito App Client ─────────────────────────────────────────────────────
+  FamilyLedgerWebAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "familyledger-web-${Environment}"
+      UserPoolId: !Ref FamilyLedgerUserPool
+      GenerateSecret: false
+      AllowedOAuthFlows: [code]
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes: [openid, email, profile]
+      CallbackURLs:
+        - !Ref CognitoCallbackUrl
+      LogoutURLs:
+        - !Ref CognitoLogoutUrl
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+  FamilyLedgerUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "familyledger-${Environment}-${AWS::AccountId}"
+      UserPoolId: !Ref FamilyLedgerUserPool
+
+  # ─── API Gateway HTTP API ───────────────────────────────────────────────────
+  FamilyLedgerApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      CorsConfiguration:
+        AllowOrigins:
+          - "http://localhost:4200"
+          - !Sub "https://${FamilyLedgerCdn.DomainName}"
+        AllowHeaders: [Content-Type, Authorization, X-Amz-Date, X-Api-Key]
+        AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+        MaxAge: 300
+      Auth:
+        DefaultAuthorizer: CognitoJwtAuthorizer
+        Authorizers:
+          CognitoJwtAuthorizer:
+            IdentitySource: "$request.header.Authorization"
+            JwtConfiguration:
+              Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${FamilyLedgerUserPool}"
+              Audience:
+                - !Ref FamilyLedgerWebAppClient
+
+  # ─── S3 Bucket for Angular SPA ──────────────────────────────────────────────
+  FamilyLedgerSpaBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "familyledger-spa-${Environment}-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  # ─── CloudFront OAC ─────────────────────────────────────────────────────────
+  FamilyLedgerCdnOac:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "familyledger-oac-${Environment}"
+        Description: "OAC for FamilyLedger SPA bucket"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  FamilyLedgerSpaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FamilyLedgerSpaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "AllowCloudFrontServicePrincipal"
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${FamilyLedgerSpaBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${FamilyLedgerCdn}"
+
+  # ─── CloudFront Distribution ────────────────────────────────────────────────
+  FamilyLedgerCdn:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "FamilyLedger Angular SPA CDN — ${Environment}"
+        Enabled: true
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        DefaultRootObject: index.html
+        Origins:
+          - Id: S3SpaOrigin
+            DomainName: !GetAtt FamilyLedgerSpaBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt FamilyLedgerCdnOac.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: S3SpaOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+Outputs:
+  CognitoUserPoolId:
+    Value: !Ref FamilyLedgerUserPool
+    Export:
+      Name: !Sub "${AWS::StackName}-CognitoUserPoolId"
+  CognitoWebAppClientId:
+    Value: !Ref FamilyLedgerWebAppClient
+    Export:
+      Name: !Sub "${AWS::StackName}-CognitoWebClientId"
+  ApiGatewayUrl:
+    Value: !Sub "https://${FamilyLedgerApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiUrl"
+  CloudFrontUrl:
+    Value: !Sub "https://${FamilyLedgerCdn.DomainName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudFrontUrl"
