@@ -6,17 +6,18 @@
 //! - Only the `Owner` can invite new members, change roles, or remove members.
 //! - Member display names cannot be empty or whitespace-only (enforced by [`DisplayName`]).
 //! - Family names cannot be empty or whitespace-only (enforced by [`FamilyName`]).
-//! - Invite tokens expire after the configured duration.
+//! - Invite tokens expire after the configured duration (must be positive).
 //! - Invite tokens cannot be used more than once.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::{
     errors::DomainError,
     events::DomainEvent,
-    value_objects::{CurrencyCode, DisplayName, FamilyName, Role},
+    value_objects::{
+        CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, MemberId, Role, UserId,
+    },
 };
 
 /// The `Family` aggregate root.
@@ -26,7 +27,7 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Family {
     /// UUID v4 — random PK, avoids write hotspots on Aurora DSQL.
-    pub id: Uuid,
+    pub id: FamilyId,
     /// Validated, trimmed family name (1–200 chars).
     pub name: FamilyName,
     /// ISO 4217 currency code for the family's default display currency.
@@ -50,11 +51,11 @@ impl Family {
     pub fn create(
         name: FamilyName,
         home_currency: CurrencyCode,
-        owner_user_id: Uuid,
+        owner_user_id: UserId,
         owner_display_name: DisplayName,
     ) -> Result<(Self, Vec<DomainEvent>), DomainError> {
-        let family_id = Uuid::new_v4();
-        let owner_member_id = Uuid::new_v4();
+        let family_id = FamilyId::new_v4();
+        let owner_member_id = MemberId::new_v4();
         let now = Utc::now();
 
         let owner = FamilyMember {
@@ -101,20 +102,29 @@ impl Family {
     ///
     /// # Authorization
     /// Only `Owner` can invite members.
+    ///
+    /// # Invariants
+    /// - `ttl` must be positive (> 0 duration).
     pub fn create_invite(
         &mut self,
-        created_by_user_id: Uuid,
+        created_by_user_id: UserId,
         role: Role,
         relationship: Option<String>,
-        expires_in_hours: u32,
+        ttl: chrono::Duration,
     ) -> Result<(InviteToken, Vec<DomainEvent>), DomainError> {
         // Only owner can invite
         let creator = self.find_active_member_by_user_id(created_by_user_id)?;
         creator.role.assert_family_management()?;
 
+        if ttl <= chrono::Duration::zero() {
+            return Err(DomainError::InvariantViolation {
+                message: "Invite expiration duration must be positive".to_string(),
+            });
+        }
+
         let now = Utc::now();
-        let token = Uuid::new_v4();
-        let expires_at = now + chrono::Duration::hours(expires_in_hours as i64);
+        let token = InviteTokenId::new_v4();
+        let expires_at = now + ttl;
 
         let invite = InviteToken {
             token,
@@ -146,8 +156,8 @@ impl Family {
     /// names are rejected by [`DisplayName`] before this call is reached.
     pub fn accept_invite(
         &mut self,
-        token: Uuid,
-        user_id: Uuid,
+        token: InviteTokenId,
+        user_id: UserId,
         display_name: DisplayName,
     ) -> Result<(FamilyMember, Vec<DomainEvent>), DomainError> {
         let now = Utc::now();
@@ -169,7 +179,7 @@ impl Family {
 
         invite.used = true;
 
-        let member_id = Uuid::new_v4();
+        let member_id = MemberId::new_v4();
         let role = invite.role;
         let relationship = invite.relationship.clone();
 
@@ -204,8 +214,8 @@ impl Family {
     /// Cannot change the Owner's own role (would leave family without an owner).
     pub fn change_member_role(
         &mut self,
-        requester_user_id: Uuid,
-        target_member_id: Uuid,
+        requester_user_id: UserId,
+        target_member_id: MemberId,
         new_role: Role,
     ) -> Result<Vec<DomainEvent>, DomainError> {
         let requester = self.find_active_member_by_user_id(requester_user_id)?;
@@ -244,8 +254,8 @@ impl Family {
     /// Only Owner can remove members. Owner cannot remove themselves.
     pub fn remove_member(
         &mut self,
-        requester_user_id: Uuid,
-        target_member_id: Uuid,
+        requester_user_id: UserId,
+        target_member_id: MemberId,
     ) -> Result<Vec<DomainEvent>, DomainError> {
         let requester = self.find_active_member_by_user_id(requester_user_id)?;
         requester.role.assert_family_management()?;
@@ -276,7 +286,7 @@ impl Family {
 
     // ── Private helpers ──────────────────────────────────────────────────────────
 
-    fn find_active_member_by_user_id(&self, user_id: Uuid) -> Result<&FamilyMember, DomainError> {
+    fn find_active_member_by_user_id(&self, user_id: UserId) -> Result<&FamilyMember, DomainError> {
         self.members
             .iter()
             .find(|m| m.user_id == user_id && m.deleted_at.is_none())
@@ -292,10 +302,10 @@ impl Family {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FamilyMember {
     /// UUID v4 — random PK, avoids write hotspots on Aurora DSQL.
-    pub id: Uuid,
-    pub family_id: Uuid,
+    pub id: MemberId,
+    pub family_id: FamilyId,
     /// Cognito `sub` — the user's permanent identifier from JWT claims.
-    pub user_id: Uuid,
+    pub user_id: UserId,
     /// Validated, trimmed display name (1–80 chars). Enforced by [`DisplayName`].
     pub display_name: DisplayName,
     pub role: Role,
@@ -319,11 +329,11 @@ impl FamilyMember {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InviteToken {
     /// UUID v4 — used as PK in database and URL token.
-    pub token: Uuid,
-    pub family_id: Uuid,
+    pub token: InviteTokenId,
+    pub family_id: FamilyId,
     pub role: Role,
     pub relationship: Option<String>,
-    pub created_by: Uuid,
+    pub created_by: UserId,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub used: bool,
@@ -334,8 +344,8 @@ pub struct InviteToken {
 mod tests {
     use super::*;
 
-    fn make_family() -> (Family, Uuid) {
-        let owner_id = Uuid::new_v4();
+    fn make_family() -> (Family, UserId) {
+        let owner_id = UserId::new_v4();
         let currency = CurrencyCode::new("USD").unwrap();
         let name = FamilyName::try_new("Test Family").unwrap();
         let owner_name = DisplayName::try_new("Alice").unwrap();
@@ -369,34 +379,60 @@ mod tests {
 
         // First add a member via invite
         let (invite, _) = family
-            .create_invite(owner_id, Role::Member, None, 48)
+            .create_invite(owner_id, Role::Member, None, chrono::Duration::hours(48))
             .unwrap();
-        let member_user_id = Uuid::new_v4();
+        let member_user_id = UserId::new_v4();
         let member_name = DisplayName::try_new("Bob").unwrap();
         let (_, _) = family
             .accept_invite(invite.token, member_user_id, member_name)
             .unwrap();
 
         // Member tries to invite — should fail
-        let result = family.create_invite(member_user_id, Role::Child, None, 24);
+        let result = family.create_invite(
+            member_user_id,
+            Role::Child,
+            None,
+            chrono::Duration::hours(24),
+        );
         assert!(matches!(result, Err(DomainError::InsufficientRole { .. })));
+    }
+
+    #[test]
+    fn invite_with_zero_or_negative_ttl_is_rejected() {
+        let (mut family, owner_id) = make_family();
+
+        let zero_ttl = family.create_invite(
+            owner_id,
+            Role::Member,
+            None,
+            chrono::Duration::zero(),
+        );
+        assert!(matches!(zero_ttl, Err(DomainError::InvariantViolation { .. })));
+
+        let negative_ttl = family.create_invite(
+            owner_id,
+            Role::Member,
+            None,
+            chrono::Duration::hours(-1),
+        );
+        assert!(matches!(negative_ttl, Err(DomainError::InvariantViolation { .. })));
     }
 
     #[test]
     fn used_token_cannot_be_reused() {
         let (mut family, owner_id) = make_family();
         let (invite, _) = family
-            .create_invite(owner_id, Role::Member, None, 48)
+            .create_invite(owner_id, Role::Member, None, chrono::Duration::hours(48))
             .unwrap();
 
         let _ = family.accept_invite(
             invite.token,
-            Uuid::new_v4(),
+            UserId::new_v4(),
             DisplayName::try_new("Bob").unwrap(),
         );
         let result = family.accept_invite(
             invite.token,
-            Uuid::new_v4(),
+            UserId::new_v4(),
             DisplayName::try_new("Carol").unwrap(),
         );
 
@@ -426,9 +462,9 @@ mod tests {
         let (mut family, owner_id) = make_family();
 
         let (invite, _) = family
-            .create_invite(owner_id, Role::Member, None, 48)
+            .create_invite(owner_id, Role::Member, None, chrono::Duration::hours(48))
             .unwrap();
-        let member_user_id = Uuid::new_v4();
+        let member_user_id = UserId::new_v4();
         let (member, _) = family
             .accept_invite(
                 invite.token,
@@ -446,7 +482,7 @@ mod tests {
 
     #[test]
     fn family_create_emits_two_events() {
-        let owner_id = Uuid::new_v4();
+        let owner_id = UserId::new_v4();
         let currency = CurrencyCode::new("MDL").unwrap();
         let name = FamilyName::try_new("My Family").unwrap();
         let owner_name = DisplayName::try_new("Ana").unwrap();

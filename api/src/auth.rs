@@ -19,9 +19,8 @@ use axum::{
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Json, Response},
 };
-use domain::value_objects::Role;
+use domain::value_objects::{FamilyId, Role, UserId};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// Claims extracted from the Cognito JWT.
 ///
@@ -31,13 +30,13 @@ use uuid::Uuid;
 pub struct AuthClaims {
     /// Cognito `sub` — the user's permanent unique identifier.
     /// This is stored as `user_id` in the `family_members` table.
-    pub user_id: Uuid,
+    pub user_id: UserId,
 
     /// The family this user belongs to. Extracted from `custom:family_id`.
     ///
     /// RULE: This value is the authoritative `family_id` for all queries.
     /// Never use a `family_id` from the request body or URL parameters.
-    pub family_id: Uuid,
+    pub family_id: FamilyId,
 
     /// The user's role within their family. Extracted from `custom:family_role`.
     pub role: Role,

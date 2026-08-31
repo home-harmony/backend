@@ -8,9 +8,8 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use crate::value_objects::Role;
+use crate::value_objects::{FamilyId, InviteTokenId, MemberId, Role, UserId};
 
 /// All domain events emitted across all bounded contexts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,37 +17,37 @@ use crate::value_objects::Role;
 pub enum DomainEvent {
     // ── Sprint 1: Identity & Family context ─────────────────────────────────────
     FamilyCreated {
-        family_id: Uuid,
+        family_id: FamilyId,
         name: String,
         home_currency: String,
         occurred_at: DateTime<Utc>,
     },
     MemberInvited {
-        family_id: Uuid,
-        invite_token: Uuid,
+        family_id: FamilyId,
+        invite_token: InviteTokenId,
         role: Role,
-        created_by: Uuid,
+        created_by: UserId,
         occurred_at: DateTime<Utc>,
     },
     MemberJoined {
-        family_id: Uuid,
-        member_id: Uuid,
-        user_id: Uuid,
+        family_id: FamilyId,
+        member_id: MemberId,
+        user_id: UserId,
         role: Role,
         occurred_at: DateTime<Utc>,
     },
     MemberRoleChanged {
-        family_id: Uuid,
-        member_id: Uuid,
+        family_id: FamilyId,
+        member_id: MemberId,
         old_role: Role,
         new_role: Role,
-        changed_by: Uuid,
+        changed_by: UserId,
         occurred_at: DateTime<Utc>,
     },
     MemberRemoved {
-        family_id: Uuid,
-        member_id: Uuid,
-        removed_by: Uuid,
+        family_id: FamilyId,
+        member_id: MemberId,
+        removed_by: UserId,
         occurred_at: DateTime<Utc>,
     },
 
@@ -91,7 +90,7 @@ pub enum DomainEvent {
 impl DomainEvent {
     /// Returns the family ID associated with this event.
     /// All events in FamilyLedger belong to a family.
-    pub fn family_id(&self) -> Uuid {
+    pub fn family_id(&self) -> FamilyId {
         match self {
             DomainEvent::FamilyCreated { family_id, .. }
             | DomainEvent::MemberInvited { family_id, .. }
