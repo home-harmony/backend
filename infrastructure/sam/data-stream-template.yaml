@@ -1,0 +1,123 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: "FamilyLedger — Database Streaming, EventBridge Bus, and IAM Execution Roles"
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment name
+
+  DsqlClusterIdentifier:
+    Type: String
+    Description: Aurora DSQL Cluster Identifier (e.g. 4bublzlvvtnwjpmgtotwrulv7m)
+
+Resources:
+  # ─── Kinesis Data Stream for Aurora DSQL CDC ─────────────────────────────────
+  FamilyLedgerCdcStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Sub "familyledger-cdc-stream-${Environment}"
+      StreamModeDetails:
+        StreamMode: ON_DEMAND
+      StreamEncryption:
+        EncryptionType: KMS
+        KeyId: alias/aws/kinesis
+
+  # ─── Custom EventBridge Event Bus ───────────────────────────────────────────
+  FamilyLedgerEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub "familyledger-events-${Environment}"
+
+  # ─── IAM Role for Rust Microservices (DSQL + EventBridge) ───────────────────
+  FamilyLedgerServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "familyledger-service-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AuroraDSQLAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: "AllowDSQLDbConnect"
+                Effect: Allow
+                Action:
+                  - dsql:DbConnect
+                  - dsql:DbConnectAdmin
+                Resource:
+                  - !Sub "arn:aws:dsql:${AWS::Region}:${AWS::AccountId}:cluster/${DsqlClusterIdentifier}"
+        - PolicyName: EventBridgePublishAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: "AllowEventBusPutEvents"
+                Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource:
+                  - !GetAtt FamilyLedgerEventBus.Arn
+
+  # ─── IAM Role for Migration Runner Lambda ────────────────────────────────────
+  FamilyLedgerMigrationRunnerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "familyledger-migration-runner-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AuroraDSQLAdminAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: "AllowDSQLDbConnectAdmin"
+                Effect: Allow
+                Action:
+                  - dsql:DbConnect
+                  - dsql:DbConnectAdmin
+                Resource:
+                  - !Sub "arn:aws:dsql:${AWS::Region}:${AWS::AccountId}:cluster/${DsqlClusterIdentifier}"
+
+Outputs:
+  CdcStreamArn:
+    Value: !GetAtt FamilyLedgerCdcStream.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-CdcStreamArn"
+  CdcStreamName:
+    Value: !Ref FamilyLedgerCdcStream
+    Export:
+      Name: !Sub "${AWS::StackName}-CdcStreamName"
+  EventBusArn:
+    Value: !GetAtt FamilyLedgerEventBus.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-EventBusArn"
+  EventBusName:
+    Value: !Ref FamilyLedgerEventBus
+    Export:
+      Name: !Sub "${AWS::StackName}-EventBusName"
+  ServiceRoleArn:
+    Value: !GetAtt FamilyLedgerServiceRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ServiceRoleArn"
+  MigrationRunnerRoleArn:
+    Value: !GetAtt FamilyLedgerMigrationRunnerRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-MigrationRunnerRoleArn"
