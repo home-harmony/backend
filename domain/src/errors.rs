@@ -6,7 +6,7 @@ use thiserror::Error;
 /// These are pure business-rule violations, not I/O or infrastructure errors.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DomainError {
-    // ── Money / Currency ──────────────────────────────────────────────────────
+    // ── Money / Currency ──────────────────────────────────────────────────────────
     #[error("Cannot mix currencies: expected {expected}, got {actual}")]
     CurrencyMismatch { expected: String, actual: String },
 
@@ -16,7 +16,7 @@ pub enum DomainError {
     #[error("Invalid currency code '{code}': must be exactly 3 uppercase ASCII letters")]
     InvalidCurrencyCode { code: String },
 
-    // ── Family ────────────────────────────────────────────────────────────────
+    // ── Family ───────────────────────────────────────────────────────────────────
     #[error("Invalid family name: {reason}")]
     InvalidFamilyName { reason: String },
 
@@ -32,18 +32,26 @@ pub enum DomainError {
     #[error("Cannot remove the family owner")]
     CannotRemoveOwner,
 
-    // ── Invite tokens ─────────────────────────────────────────────────────────
+    // ── Invite tokens ────────────────────────────────────────────────────────────
     #[error("Invite token has expired")]
     TokenExpired,
 
     #[error("Invite token has already been used")]
     TokenAlreadyUsed,
 
-    // ── Authorization ─────────────────────────────────────────────────────────
+    // ── Debt & Loans (ADR-0008) ──────────────────────────────────────────────────
+    #[error("Invalid payment split: principal ({principal}) + interest ({interest}) != total payment ({total})")]
+    InvalidPaymentSplit {
+        principal: String,
+        interest: String,
+        total: String,
+    },
+
+    // ── Authorization ────────────────────────────────────────────────────────────
     #[error("Role '{role}' is not permitted to perform this action")]
     InsufficientRole { role: String },
 
-    // ── Generic ───────────────────────────────────────────────────────────────
+    // ── Generic ──────────────────────────────────────────────────────────────────
     #[error("Invariant violation: {message}")]
     InvariantViolation { message: String },
 }

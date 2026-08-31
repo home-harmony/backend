@@ -1,14 +1,13 @@
-//! `Family` aggregate root — Identity & Family bounded context.
+//! Family aggregate root — manages members, roles, and invite tokens.
 //!
-//! The `Family` is the central aggregate root. All other entities belong to
-//! a family and are accessed through a `family_id` qualifier in every query.
-//!
-//! # Invariants enforced by this aggregate
-//!
-//! 1. A family must always have exactly one Owner.
-//! 2. The Owner cannot be removed (use `change_role` first to demote them).
-//! 3. `family_id` is never trusted from client input — it comes from the JWT.
-//! 4. Soft-deletes only — never hard-delete members.
+//! # Invariants enforced:
+//! - A family must always have exactly one `Owner` upon creation.
+//! - The `Owner` role cannot be changed or removed by anyone (including the owner).
+//! - Only the `Owner` can invite new members, change roles, or remove members.
+//! - Member display names cannot be empty or whitespace-only (enforced by [`DisplayName`]).
+//! - Family names cannot be empty or whitespace-only (enforced by [`FamilyName`]).
+//! - Invite tokens expire after the configured duration.
+//! - Invite tokens cannot be used more than once.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -20,41 +19,43 @@ use crate::{
     value_objects::{CurrencyCode, DisplayName, FamilyName, Role},
 };
 
-// ─── Family Aggregate Root ────────────────────────────────────────────────────
-
-/// The Family aggregate root.
+/// The `Family` aggregate root.
 ///
-/// Owns a list of members and invite tokens.
-/// All mutations return a `Vec<DomainEvent>` for publication.
+/// Encapsulates the family profile, its member roster, and pending invite tokens.
+/// All mutations emit domain events and enforce family-level invariants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Family {
+    /// UUID v4 — random PK, avoids write hotspots on Aurora DSQL.
     pub id: Uuid,
-    /// Validated, trimmed family name (1–100 chars). Enforced by [`FamilyName`].
+    /// Validated, trimmed family name (1–200 chars).
     pub name: FamilyName,
+    /// ISO 4217 currency code for the family's default display currency.
     pub home_currency: CurrencyCode,
-    pub created_at: DateTime<Utc>,
-    pub deleted_at: Option<DateTime<Utc>>,
-
+    /// All members of this family, including soft-deleted ones.
     pub members: Vec<FamilyMember>,
+    /// All invite tokens issued for this family.
     pub invite_tokens: Vec<InviteToken>,
+    pub created_at: DateTime<Utc>,
+    /// Soft-delete timestamp. `None` means the family is active.
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 impl Family {
-    /// Creates a new family with the founding owner.
+    /// Creates a new `Family` aggregate with the creator as the sole `Owner`.
     ///
-    /// Both `name` and `owner_display_name` are validated value objects —
-    /// construction is rejected at the call site before reaching this method.
-    ///
-    /// Returns the new `Family` and the `FamilyCreated` + `MemberJoined` events.
+    /// # Invariants
+    /// - `name` is a validated [`FamilyName`] (cannot be blank, max 200 chars).
+    /// - `owner_display_name` is a validated [`DisplayName`] (cannot be blank).
+    /// - Emits `FamilyCreated` and `MemberJoined` events.
     pub fn create(
         name: FamilyName,
         home_currency: CurrencyCode,
         owner_user_id: Uuid,
         owner_display_name: DisplayName,
     ) -> Result<(Self, Vec<DomainEvent>), DomainError> {
-        let now = Utc::now();
         let family_id = Uuid::new_v4();
         let owner_member_id = Uuid::new_v4();
+        let now = Utc::now();
 
         let owner = FamilyMember {
             id: owner_member_id,
@@ -71,10 +72,10 @@ impl Family {
             id: family_id,
             name: name.clone(),
             home_currency: home_currency.clone(),
-            created_at: now,
-            deleted_at: None,
             members: vec![owner],
             invite_tokens: vec![],
+            created_at: now,
+            deleted_at: None,
         };
 
         let events = vec![
@@ -112,15 +113,16 @@ impl Family {
         creator.role.assert_family_management()?;
 
         let now = Utc::now();
-        let token_str = Uuid::new_v4().to_string();
+        let token = Uuid::new_v4();
         let expires_at = now + chrono::Duration::hours(expires_in_hours as i64);
 
         let invite = InviteToken {
-            token: token_str.clone(),
+            token,
             family_id: self.id,
             role,
             relationship: relationship.clone(),
             created_by: created_by_user_id,
+            created_at: now,
             expires_at,
             used: false,
         };
@@ -129,7 +131,7 @@ impl Family {
 
         let events = vec![DomainEvent::MemberInvited {
             family_id: self.id,
-            invite_token: token_str,
+            invite_token: token,
             role,
             created_by: created_by_user_id,
             occurred_at: now,
@@ -144,7 +146,7 @@ impl Family {
     /// names are rejected by [`DisplayName`] before this call is reached.
     pub fn accept_invite(
         &mut self,
-        token_str: &str,
+        token: Uuid,
         user_id: Uuid,
         display_name: DisplayName,
     ) -> Result<(FamilyMember, Vec<DomainEvent>), DomainError> {
@@ -153,9 +155,9 @@ impl Family {
         let invite = self
             .invite_tokens
             .iter_mut()
-            .find(|t| t.token == token_str)
+            .find(|t| t.token == token)
             .ok_or(DomainError::InvariantViolation {
-                message: format!("Invite token not found: {}", token_str),
+                message: format!("Invite token not found: {}", token),
             })?;
 
         if invite.used {
@@ -272,7 +274,7 @@ impl Family {
         }])
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+    // ── Private helpers ──────────────────────────────────────────────────────────
 
     fn find_active_member_by_user_id(&self, user_id: Uuid) -> Result<&FamilyMember, DomainError> {
         self.members
@@ -311,17 +313,18 @@ impl FamilyMember {
     }
 }
 
-// ─── InviteToken Entity ───────────────────────────────────────────────────────
+// ─── InviteToken Entity ──────────────────────────────────────────────────────
 
 /// A one-time invite token that allows a new user to join the family.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InviteToken {
-    /// UUID string — used as the URL token.
-    pub token: String,
+    /// UUID v4 — used as PK in database and URL token.
+    pub token: Uuid,
     pub family_id: Uuid,
     pub role: Role,
     pub relationship: Option<String>,
     pub created_by: Uuid,
+    pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub used: bool,
 }
@@ -371,7 +374,7 @@ mod tests {
         let member_user_id = Uuid::new_v4();
         let member_name = DisplayName::try_new("Bob").unwrap();
         let (_, _) = family
-            .accept_invite(&invite.token, member_user_id, member_name)
+            .accept_invite(invite.token, member_user_id, member_name)
             .unwrap();
 
         // Member tries to invite — should fail
@@ -387,12 +390,12 @@ mod tests {
             .unwrap();
 
         let _ = family.accept_invite(
-            &invite.token,
+            invite.token,
             Uuid::new_v4(),
             DisplayName::try_new("Bob").unwrap(),
         );
         let result = family.accept_invite(
-            &invite.token,
+            invite.token,
             Uuid::new_v4(),
             DisplayName::try_new("Carol").unwrap(),
         );
@@ -428,7 +431,7 @@ mod tests {
         let member_user_id = Uuid::new_v4();
         let (member, _) = family
             .accept_invite(
-                &invite.token,
+                invite.token,
                 member_user_id,
                 DisplayName::try_new("Bob").unwrap(),
             )
