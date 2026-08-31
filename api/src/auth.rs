@@ -16,7 +16,7 @@
 
 use axum::{
     extract::FromRequestParts,
-    http::{request::Parts, StatusCode},
+    http::{StatusCode, request::Parts},
     response::{IntoResponse, Json, Response},
 };
 use domain::value_objects::Role;

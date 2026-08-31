@@ -30,10 +30,10 @@
 
 use anyhow::Context;
 use aurora_dsql_sqlx_connector::pool;
-use lambda_runtime::{run, service_fn, Error, LambdaEvent};
+use lambda_runtime::{Error, LambdaEvent, run, service_fn};
 use serde::{Deserialize, Serialize};
 use tracing::info;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 // ─── Embedded Migrations ──────────────────────────────────────────────────────
 // `sqlx::migrate!` embeds all SQL files from the `migrations/` directory into
@@ -75,8 +75,8 @@ async fn main() -> Result<(), Error> {
 
 async fn handler(_event: LambdaEvent<Request>) -> Result<Response, Error> {
     // Read the Aurora DSQL cluster endpoint from the environment.
-    let dsql_endpoint = std::env::var("DSQL_ENDPOINT")
-        .context("DSQL_ENDPOINT environment variable is required")?;
+    let dsql_endpoint =
+        std::env::var("DSQL_ENDPOINT").context("DSQL_ENDPOINT environment variable is required")?;
 
     info!(endpoint = %dsql_endpoint, "Connecting to Aurora DSQL");
 
@@ -98,7 +98,10 @@ async fn handler(_event: LambdaEvent<Request>) -> Result<Response, Error> {
 
     let total_migrations = MIGRATOR.iter().count();
 
-    info!(count = total_migrations, "All migrations applied successfully");
+    info!(
+        count = total_migrations,
+        "All migrations applied successfully"
+    );
 
     Ok(Response {
         message: "Schema migrations completed successfully".to_string(),

@@ -39,18 +39,12 @@ impl ApiError {
 /// Authorization violations → 403 Forbidden
 pub fn domain_error_response(err: DomainError) -> Response {
     let (status, code) = match &err {
-        DomainError::InsufficientRole { .. } => {
-            (StatusCode::FORBIDDEN, "INSUFFICIENT_ROLE")
-        }
+        DomainError::InsufficientRole { .. } => (StatusCode::FORBIDDEN, "INSUFFICIENT_ROLE"),
         DomainError::TokenExpired => (StatusCode::GONE, "TOKEN_EXPIRED"),
         DomainError::TokenAlreadyUsed => (StatusCode::CONFLICT, "TOKEN_ALREADY_USED"),
         DomainError::MemberNotFound { .. } => (StatusCode::NOT_FOUND, "MEMBER_NOT_FOUND"),
         _ => (StatusCode::UNPROCESSABLE_ENTITY, "DOMAIN_ERROR"),
     };
 
-    (
-        status,
-        Json(ApiError::with_code(err.to_string(), code)),
-    )
-        .into_response()
+    (status, Json(ApiError::with_code(err.to_string(), code))).into_response()
 }

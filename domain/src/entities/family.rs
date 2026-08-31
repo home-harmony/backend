@@ -382,7 +382,9 @@ mod tests {
     #[test]
     fn used_token_cannot_be_reused() {
         let (mut family, owner_id) = make_family();
-        let (invite, _) = family.create_invite(owner_id, Role::Member, None, 48).unwrap();
+        let (invite, _) = family
+            .create_invite(owner_id, Role::Member, None, 48)
+            .unwrap();
 
         let _ = family.accept_invite(
             &invite.token,
@@ -420,7 +422,9 @@ mod tests {
     fn member_soft_delete_sets_deleted_at() {
         let (mut family, owner_id) = make_family();
 
-        let (invite, _) = family.create_invite(owner_id, Role::Member, None, 48).unwrap();
+        let (invite, _) = family
+            .create_invite(owner_id, Role::Member, None, 48)
+            .unwrap();
         let member_user_id = Uuid::new_v4();
         let (member, _) = family
             .accept_invite(

@@ -2,62 +2,64 @@
 members = ["domain", "infrastructure", "api", "lambdas/migrate_runner"]
 resolver = "2"
 
-# ─── Workspace-level dependency versions ──────────────────────────────────────
+# ─── Workspace-level dependency versions ──────────────────────────────
 # Define versions here once; crates opt-in with `dep-name.workspace = true`.
 # This prevents version mismatches between crates.
 [workspace.dependencies]
 
-# ── Async runtime ─────────────────────────────────────────────────────────────
-tokio = { version = "1", features = ["full"] }
+# ─── Async runtime ───────────────────────────────────────────────────
+tokio = { version = "1.53.1", features = ["full"] }
 
-# ── Database ──────────────────────────────────────────────────────────────────
+# ─── Database ────────────────────────────────────────────────────────
 sqlx = { version = "0.9.0", features = [
     "postgres",
-    "runtime-tokio-rustls",
+    "runtime-tokio",
+    "tls-rustls-ring",
     "macros",
     "migrate",
     "uuid",
     "chrono",
     "rust_decimal",
+    "json",
 ] }
 aurora-dsql-sqlx-connector = { version = "0.2.2", features = ["pool", "occ"] }
 
-# ── Domain types ──────────────────────────────────────────────────────────────
+# ─── Domain types ────────────────────────────────────────────────────
 # rust_decimal: float-free exact decimal arithmetic for money.
 # RULE: Money is ALWAYS rust_decimal::Decimal, never f64/f32.
-rust_decimal = { version = "1", features = ["serde-with-str"] }
-rust_decimal_macros = "1"
+rust_decimal = { version = "1.42.1", features = ["serde-with-str"] }
+rust_decimal_macros = "1.40.0"
 
 # uuid: v4 for most PKs, v7 for transaction IDs (time-sortable → keyset pagination).
-uuid = { version = "1", features = ["v4", "v7", "serde"] }
+uuid = { version = "1.26.0", features = ["v4", "v7", "serde"] }
 
-# ── Date/time ─────────────────────────────────────────────────────────────────
+# ─── Date/time ───────────────────────────────────────────────────────
 chrono = { version = "0.4", features = ["serde"] }
 
-# ── Serialization ─────────────────────────────────────────────────────────────
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# ─── Serialization ───────────────────────────────────────────────────
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
-# ── HTTP / Lambda ─────────────────────────────────────────────────────────────
+# ─── HTTP / Lambda ───────────────────────────────────────────────────
 axum = { version = "0.8.9", features = ["macros"] }
-lambda_http = "1.2.1"
-lambda_runtime = "1.2.1"
-tower = "0.5"
+lambda_http = "1.3.0"
+lambda_runtime = "1.3.0"
+tower = "0.5.3"
 tower-http = { version = "0.7.0", features = ["trace", "cors"] }
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+# ─── Auth ────────────────────────────────────────────────────────────
 jsonwebtoken = "10.4.0"
 
-# ── Observability ─────────────────────────────────────────────────────────────
+# ─── Observability ───────────────────────────────────────────────────
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# ── Error handling ────────────────────────────────────────────────────────────
-thiserror = "2.0.18"
-anyhow = "1.0.82"
+# ─── Error handling ───────────────────────────────────────────────────
+thiserror = "2.0.20"
+anyhow = "1.0.104"
 
-# ── Base64 (cursor encoding for keyset pagination) ────────────────────────────
+# ─── Base64 (cursor encoding for keyset pagination) ────────────────────
 base64 = "0.22"
 
-# ── Value objects (strongly-typed primitives with built-in validation) ─────────
+# ─── Value objects (strongly-typed primitives with built-in validation) ─────────
 nutype = { version = "0.7", features = ["serde"] }

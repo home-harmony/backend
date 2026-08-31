@@ -39,8 +39,8 @@ use tracing::info;
 /// - IAM token generation fails (check Lambda execution role permissions)
 /// - Connection to the cluster fails
 pub async fn create_pool() -> Result<PgPool> {
-    let endpoint = std::env::var("DSQL_ENDPOINT")
-        .context("DSQL_ENDPOINT environment variable is required")?;
+    let endpoint =
+        std::env::var("DSQL_ENDPOINT").context("DSQL_ENDPOINT environment variable is required")?;
 
     info!(endpoint = %endpoint, "Connecting to Aurora DSQL");
 
