@@ -14,14 +14,51 @@ Parameters:
     Type: String
     Description: Aurora DSQL Cluster Identifier (e.g. 4bublzlvvtnwjpmgtotwrulv7m)
 
+  DeployKinesisStream:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Whether to deploy the Kinesis Data Stream. Set to false during early development
+      (Sprints 1-3) to avoid hourly stream charges ($0.04/hr On-Demand or $0.015/hr Provisioned).
+
+  KinesisCapacityMode:
+    Type: String
+    Default: PROVISIONED
+    AllowedValues: [PROVISIONED, ON_DEMAND]
+    Description: >-
+      Kinesis capacity mode. Use PROVISIONED (1 shard) in dev to save 63% on baseline cost ($0.015/hr),
+      or ON_DEMAND in prod for automatic scaling.
+
+  KinesisShardCount:
+    Type: Number
+    Default: 1
+    Description: Number of shards for PROVISIONED mode (ignored if ON_DEMAND or DeployKinesisStream=false).
+
+Conditions:
+  ShouldDeployKinesis: !Equals [!Ref DeployKinesisStream, "true"]
+  IsOnDemand: !And
+    - !Equals [!Ref DeployKinesisStream, "true"]
+    - !Equals [!Ref KinesisCapacityMode, "ON_DEMAND"]
+  IsProvisioned: !And
+    - !Equals [!Ref DeployKinesisStream, "true"]
+    - !Equals [!Ref KinesisCapacityMode, "PROVISIONED"]
+
 Resources:
-  # ─── Kinesis Data Stream for Aurora DSQL CDC ─────────────────────────────────
+  # ─── Kinesis Data Stream for Aurora DSQL CDC (Conditional) ───────────────────
   FamilyLedgerCdcStream:
     Type: AWS::Kinesis::Stream
+    Condition: ShouldDeployKinesis
     Properties:
       Name: !Sub "familyledger-cdc-stream-${Environment}"
-      StreamModeDetails:
-        StreamMode: ON_DEMAND
+      StreamModeDetails: !If
+        - IsOnDemand
+        - StreamMode: ON_DEMAND
+        - !Ref "AWS::NoValue"
+      ShardCount: !If
+        - IsProvisioned
+        - !Ref KinesisShardCount
+        - !Ref "AWS::NoValue"
       StreamEncryption:
         EncryptionType: KMS
         KeyId: alias/aws/kinesis
@@ -98,10 +135,12 @@ Resources:
 
 Outputs:
   CdcStreamArn:
+    Condition: ShouldDeployKinesis
     Value: !GetAtt FamilyLedgerCdcStream.Arn
     Export:
       Name: !Sub "${AWS::StackName}-CdcStreamArn"
   CdcStreamName:
+    Condition: ShouldDeployKinesis
     Value: !Ref FamilyLedgerCdcStream
     Export:
       Name: !Sub "${AWS::StackName}-CdcStreamName"
