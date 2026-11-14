@@ -9,10 +9,13 @@
 //! We still parse the JWT to extract `sub` (user ID), `custom:family_id`,
 //! and `custom:family_role` from the claims.
 //!
-//! ## RULE (GEMINI.md §9)
+//! ## RULE (GEMINI.md §9 & ADR-0011)
 //!
-//! `family_id` is **NEVER** trusted from client request bodies or query params.
-//! It is **always** extracted from the JWT claims here.
+//! `family_id` is **NEVER** trusted from unverified client request bodies or query params.
+//! In Sprint 1, `user_id` (`sub`), `family_id`, and `role` are extracted from JWT claims.
+//! In Sprint 2 (per ADR-0011 Multi-Family Membership), `user_id` is extracted from the verified
+//! Cognito JWT (`sub`), while the active workspace `X-Family-Id` header is verified against active
+//! membership in `family_members` before populating `AuthClaims`.
 
 use axum::{
     extract::FromRequestParts,

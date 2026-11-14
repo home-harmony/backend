@@ -1,15 +1,15 @@
 # Aurora DSQL Migration Files
 #
-# RULES (GEMINI.md + Sprint Plan Task 3.1):
+# RULES (documentation/architecture/aurora-dsql.md + Sprint Plan Task 3.1):
 #   1. Exactly ONE DDL statement per file. Never mix DDL and DML.
-#   2. Never use: FOREIGN KEY, SERIAL, BIGSERIAL, JSONB columns, TRUNCATE, triggers.
-#   3. All PKs must use: UUID PRIMARY KEY DEFAULT gen_random_uuid()
-#   4. All indexes must use: CREATE INDEX ASYNC (never blocking CREATE INDEX)
-#   5. Store JSON data as TEXT columns; cast to ::jsonb at query time.
+#   2. Never use: SERIAL, BIGSERIAL, TRUNCATE, triggers.
+#   3. All PKs must use: UUID PRIMARY KEY DEFAULT gen_random_uuid() (or UUID v7 from application code).
+#   4. Explicit FOREIGN KEY (...) REFERENCES ... and native JSONB columns are supported.
+#   5. All indexes must use: CREATE INDEX ASYNC (never blocking CREATE INDEX).
 #   6. Never modify already-applied migration files. Add new ones instead.
 #
-# File naming convention (Flyway-style):
-#   V{timestamp}_{description}.sql
+# File naming convention:
+#   {YYYYMMDDHHMMSS}_{description}.sql
 #
-# The 25 migration files for Sprint 1 (Task 3.1) will be added here.
-# See the sprint plan for the full list of files.
+# The 34 migration files for Sprint 1 (Task 3.1) are placed here.
+# See documentation/roadmap/sprint-1/task_3_1_detailed_guide.md for the full list of files.
