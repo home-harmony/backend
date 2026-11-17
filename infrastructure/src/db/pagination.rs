@@ -27,7 +27,7 @@
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 /// Maximum number of items returned per page for UI queries.
@@ -37,25 +37,51 @@ pub const MAX_PAGE_SIZE: u32 = 50;
 /// Default page size if the client doesn't specify one.
 pub const DEFAULT_PAGE_SIZE: u32 = 20;
 
-/// A decoded pagination cursor holding the sort key of the last seen row.
-#[derive(Debug, Serialize, Deserialize)]
+/// A pagination cursor holding the sort key of the last seen row.
+///
+/// Serializes to and deserializes from an opaque URL-safe base64 token on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageCursor {
     /// Timestamp of the last item (`occurred_at` for transactions).
-    #[serde(rename = "t")]
     pub timestamp: DateTime<Utc>,
     /// UUID of the last item — used as a stable tiebreaker.
-    #[serde(rename = "i")]
     pub id: Uuid,
 }
 
+/// Standard paginated API response wrapper.
+#[derive(Debug, Serialize)]
+pub struct Page<T: Serialize> {
+    pub items: Vec<T>,
+    /// Cursor for the next page (serialized as an opaque base64 token).
+    /// `None` if this is the last page.
+    pub next_cursor: Option<PageCursor>,
+    pub has_more: bool,
+}
+
+/// Internal JSON payload encoded inside the base64 cursor token.
+#[derive(Deserialize)]
+struct CursorPayload {
+    #[serde(rename = "t")]
+    timestamp: DateTime<Utc>,
+    #[serde(rename = "i")]
+    id: Uuid,
+}
+
 impl PageCursor {
+    /// Creates a new pagination cursor from the last row's sort key.
+    #[must_use]
+    pub const fn new(timestamp: DateTime<Utc>, id: Uuid) -> Self {
+        Self { timestamp, id }
+    }
+
     /// Encodes the cursor as a URL-safe base64 string.
     ///
     /// Returns an opaque token the client passes back on the next request.
-    pub fn encode(timestamp: DateTime<Utc>, id: Uuid) -> String {
+    #[must_use]
+    pub fn encode(&self) -> String {
         let payload = serde_json::json!({
-            "t": timestamp.to_rfc3339(),
-            "i": id.to_string()
+            "t": self.timestamp.to_rfc3339(),
+            "i": self.id.to_string()
         });
         URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes())
     }
@@ -69,19 +95,10 @@ impl PageCursor {
         let bytes = URL_SAFE_NO_PAD
             .decode(token)
             .context("Invalid cursor: base64 decode failed")?;
-        let cursor: Self =
+        let payload: CursorPayload =
             serde_json::from_slice(&bytes).context("Invalid cursor: JSON decode failed")?;
-        Ok(cursor)
+        Ok(Self::new(payload.timestamp, payload.id))
     }
-}
-
-/// Standard paginated API response wrapper.
-#[derive(Debug, Serialize)]
-pub struct Page<T: Serialize> {
-    pub items: Vec<T>,
-    /// Opaque base64 token for the next page. `None` if this is the last page.
-    pub next_cursor: Option<String>,
-    pub has_more: bool,
 }
 
 impl<T: Serialize> Page<T> {
@@ -109,7 +126,7 @@ impl<T: Serialize> Page<T> {
         let next_cursor = if has_more {
             items_plus_one.last().map(|last| {
                 let (ts, id) = cursor_fn(last);
-                PageCursor::encode(ts, id)
+                PageCursor::new(ts, id)
             })
         } else {
             None
@@ -123,6 +140,25 @@ impl<T: Serialize> Page<T> {
     }
 }
 
+impl Serialize for PageCursor {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.encode())
+    }
+}
+
+impl<'de> Deserialize<'de> for PageCursor {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let token = String::deserialize(deserializer)?;
+        Self::decode(&token).map_err(serde::de::Error::custom)
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
@@ -133,13 +169,25 @@ mod tests {
     fn cursor_round_trip() {
         let ts = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
         let id = Uuid::new_v4();
+        let cursor = PageCursor::new(ts, id);
 
-        let token = PageCursor::encode(ts, id);
+        let token = cursor.encode();
         let decoded = PageCursor::decode(&token).unwrap();
 
-        // Timestamps are serialized/deserialized through RFC 3339 string — sub-second precision
-        assert_eq!(decoded.timestamp.timestamp(), ts.timestamp());
-        assert_eq!(decoded.id, id);
+        assert_eq!(decoded, cursor);
+    }
+
+    #[test]
+    fn cursor_serde_serializes_as_opaque_base64_string() {
+        let ts = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+        let id = Uuid::new_v4();
+        let cursor = PageCursor::new(ts, id);
+
+        let json = serde_json::to_value(cursor).unwrap();
+        assert_eq!(json, serde_json::Value::String(cursor.encode()));
+
+        let round_tripped: PageCursor = serde_json::from_value(json).unwrap();
+        assert_eq!(round_tripped, cursor);
     }
 
     #[test]
@@ -150,11 +198,13 @@ mod tests {
 
     #[test]
     fn page_has_more_when_extra_item_returned() {
+        let ts = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+        let id = Uuid::new_v4();
         let items: Vec<u32> = (1..=21).collect(); // 21 items, page size 20
-        let page = Page::from_query_result(items, 20, |_| (Utc::now(), Uuid::new_v4()));
+        let page = Page::from_query_result(items, 20, |_| (ts, id));
         assert!(page.has_more);
         assert_eq!(page.items.len(), 20);
-        assert!(page.next_cursor.is_some());
+        assert_eq!(page.next_cursor, Some(PageCursor::new(ts, id)));
     }
 
     #[test]

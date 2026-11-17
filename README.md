@@ -33,7 +33,7 @@ backend/
 
 ## Tech Stack
 
-- **Rust 1.99.1** with `edition = "2024"`
+- **Rust 1.100.0** with `edition = "2024"`
 - **Axum 0.8** — async HTTP framework
 - **SQLx 0.9** — compile-time verified SQL queries
 - **Aurora DSQL** via `aurora-dsql-sqlx-connector` (IAM auth + OCC retry)
