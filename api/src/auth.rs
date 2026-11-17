@@ -1,50 +1,49 @@
-//! JWT authentication claims and Axum extractor.
+//! Authentication claims and Axum extractor (ADR-0011).
 //!
-//! ## How JWT validation works in this architecture
+//! ## How authentication and multi-family context work
 //!
-//! API Gateway validates the JWT signature before the request reaches Lambda.
-//! The Lambda handler only needs to decode the (already-trusted) claims from
-//! the `requestContext.authorizer.jwt.claims` field in the Lambda event.
+//! 1. API Gateway validates the Cognito JWT signature before the request reaches Lambda.
+//! 2. Auth middleware extracts `user_id` (`sub`) and `email` from the validated JWT claims.
+//! 3. For family-scoped requests, the client sends the active workspace via the `X-Family-Id`
+//!    HTTP header. Auth middleware verifies active membership in `family_members` for
+//!    `(family_id, user_id)` and resolves `role` and `permissions` before inserting `AuthClaims`.
 //!
-//! We still parse the JWT to extract `sub` (user ID), `custom:family_id`,
-//! and `custom:family_role` from the claims.
-//!
-//! ## RULE (GEMINI.md §9 & ADR-0011)
+//! ## RULE (AGENTS.md & ADR-0011)
 //!
 //! `family_id` is **NEVER** trusted from unverified client request bodies or query params.
-//! In Sprint 1, `user_id` (`sub`), `family_id`, and `role` are extracted from JWT claims.
-//! In Sprint 2 (per ADR-0011 Multi-Family Membership), `user_id` is extracted from the verified
-//! Cognito JWT (`sub`), while the active workspace `X-Family-Id` header is verified against active
-//! membership in `family_members` before populating `AuthClaims`.
+//! It is extracted from `X-Family-Id` and strictly verified against `family_members` in Aurora DSQL.
 
 use axum::{
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Json, Response},
 };
-use domain::value_objects::{FamilyId, Role, UserId};
+use domain::value_objects::{FamilyId, Permission, Role, UserId};
 use serde::{Deserialize, Serialize};
 
-/// Claims extracted from the Cognito JWT.
+/// Authenticated caller and verified family workspace context.
 ///
-/// These are populated by API Gateway from the validated JWT before invoking Lambda.
-/// The handler receives them pre-validated — no signature verification needed here.
+/// Populated by auth middleware from the validated Cognito JWT (`user_id`, `email`)
+/// and verified `X-Family-Id` membership (`family_id`, `role`, `permissions`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthClaims {
     /// Cognito `sub` — the user's permanent unique identifier.
-    /// This is stored as `user_id` in the `family_members` table.
+    /// Stored as `user_id` in the `family_members` table.
     pub user_id: UserId,
 
-    /// The family this user belongs to. Extracted from `custom:family_id`.
+    /// Verified active family workspace ID from the `X-Family-Id` header.
     ///
     /// RULE: This value is the authoritative `family_id` for all queries.
-    /// Never use a `family_id` from the request body or URL parameters.
+    /// Never use a `family_id` from the request body or query parameters.
     pub family_id: FamilyId,
 
-    /// The user's role within their family. Extracted from `custom:family_role`.
+    /// The user's resolved role within `family_id` (from `family_members.role`).
     pub role: Role,
 
-    /// User's email address from the JWT `email` claim.
+    /// Granular permission flags for `Role::Other` members (from `family_members.permissions`).
+    pub permissions: Vec<Permission>,
+
+    /// User's email address from the Cognito JWT `email` claim.
     pub email: String,
 }
 
@@ -60,7 +59,7 @@ pub struct AuthClaims {
 /// use api::auth::AuthClaims;
 ///
 /// async fn get_family(Extension(claims): Extension<AuthClaims>) -> Json<String> {
-///     // claims.family_id is safe to use — came from JWT, not client input
+///     // claims.family_id is safe to use — verified against family_members
 ///     Json(claims.family_id.to_string())
 /// }
 /// ```

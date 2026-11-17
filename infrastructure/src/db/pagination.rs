@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Maximum number of items returned per page for UI queries.
-/// RULE (GEMINI.md §4): Page size ≤ 50.
+/// RULE (AGENTS.md §2 & ADR-0002): Page size ≤ 50.
 pub const MAX_PAGE_SIZE: u32 = 50;
 
 /// Default page size if the client doesn't specify one.

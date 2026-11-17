@@ -6,7 +6,7 @@
 //! # Invariants
 //! - Leading/trailing whitespace is trimmed automatically.
 //! - The trimmed value must not be empty.
-//! - Maximum 100 Unicode characters (practical display cap).
+//! - Maximum 200 Unicode characters (matches `family_families.name VARCHAR(200)`).
 //!
 //! # Examples
 //! ```
@@ -23,7 +23,7 @@ use nutype::nutype;
 
 #[nutype(
     sanitize(trim),
-    validate(not_empty, len_char_max = 100),
+    validate(not_empty, len_char_max = 200),
     derive(
         Debug,
         Clone,
@@ -68,13 +68,13 @@ mod tests {
 
     #[test]
     fn too_long_is_rejected() {
-        let long = "a".repeat(101);
+        let long = "a".repeat(201);
         assert!(FamilyName::try_new(long).is_err());
     }
 
     #[test]
-    fn exactly_100_chars_is_accepted() {
-        let at_limit = "a".repeat(100);
+    fn exactly_200_chars_is_accepted() {
+        let at_limit = "a".repeat(200);
         assert!(FamilyName::try_new(at_limit).is_ok());
     }
 }

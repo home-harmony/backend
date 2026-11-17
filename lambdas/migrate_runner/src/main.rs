@@ -26,10 +26,10 @@
 //!
 //! Each file under `migrations/` contains **exactly one DDL statement**.
 //! This is required by Aurora DSQL which only allows one DDL operation per transaction.
-//! See the sprint plan Task 3.1 for the full list of migration files.
+//! See `documentation/roadmap/sprint-1/task_3_1_detailed_guide.md` for the full list of migration files.
 
 use anyhow::Context;
-use aurora_dsql_sqlx_connector::pool;
+use infrastructure::db::pool::create_pool;
 use lambda_runtime::{Error, LambdaEvent, run, service_fn};
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -37,7 +37,7 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 
 // ─── Embedded Migrations ──────────────────────────────────────────────────────
 // `sqlx::migrate!` embeds all SQL files from the `migrations/` directory into
-// the compiled binary at build time. The path is relative to the workspace root.
+// the compiled binary at build time. The path is relative to the crate manifest.
 // At runtime, no filesystem access is needed — migrations live inside the binary.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
@@ -74,17 +74,7 @@ async fn main() -> Result<(), Error> {
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 async fn handler(_event: LambdaEvent<Request>) -> Result<Response, Error> {
-    // Read the Aurora DSQL cluster endpoint from the environment.
-    let dsql_endpoint =
-        std::env::var("DSQL_ENDPOINT").context("DSQL_ENDPOINT environment variable is required")?;
-
-    info!(endpoint = %dsql_endpoint, "Connecting to Aurora DSQL");
-
-    // Connect using the official connector.
-    // It auto-generates an IAM auth token using the Lambda execution role — no password needed.
-    let pg_pool = pool::connect(&dsql_endpoint)
-        .await
-        .context("Failed to connect to Aurora DSQL")?;
+    let pg_pool = create_pool().await?;
 
     info!("Running schema migrations");
 

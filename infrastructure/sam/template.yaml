@@ -51,13 +51,6 @@ Resources:
         EmailMessage: "Your verification code is {####}"
       UserPoolAddOns:
         AdvancedSecurityMode: AUDIT
-      Schema:
-        - Name: family_id
-          AttributeDataType: String
-          Mutable: true
-        - Name: family_role
-          AttributeDataType: String
-          Mutable: true
 
   # ─── Cognito App Client ─────────────────────────────────────────────────────
   FamilyLedgerWebAppClient:
@@ -99,7 +92,7 @@ Resources:
         AllowOrigins:
           - "http://localhost:4200"
           - !Sub "https://${FamilyLedgerCdn.DomainName}"
-        AllowHeaders: [Content-Type, Authorization, X-Amz-Date, X-Api-Key]
+        AllowHeaders: [Content-Type, Authorization, X-Amz-Date, X-Api-Key, X-Family-Id]
         AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
         MaxAge: 300
       Auth:

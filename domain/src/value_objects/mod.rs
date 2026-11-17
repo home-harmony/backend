@@ -16,4 +16,4 @@ pub use display_name::DisplayName;
 pub use family_name::FamilyName;
 pub use ids::*;
 pub use money::Money;
-pub use role::Role;
+pub use role::{Permission, Role};

@@ -2,13 +2,18 @@
 members = ["domain", "infrastructure", "api", "lambdas/migrate_runner"]
 resolver = "2"
 
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
 # ─── Workspace-level dependency versions ──────────────────────────────
 # Define versions here once; crates opt-in with `dep-name.workspace = true`.
 # This prevents version mismatches between crates.
 [workspace.dependencies]
 
 # ─── Async runtime ───────────────────────────────────────────────────
-tokio = { version = "1.53.1", features = ["full"] }
+tokio = { version = "1.54.1", features = ["full"] }
 
 # ─── Database ────────────────────────────────────────────────────────
 sqlx = { version = "0.9.0", features = [
@@ -27,39 +32,45 @@ aurora-dsql-sqlx-connector = { version = "0.2.2", features = ["pool", "occ"] }
 # ─── Domain types ────────────────────────────────────────────────────
 # rust_decimal: float-free exact decimal arithmetic for money.
 # RULE: Money is ALWAYS rust_decimal::Decimal, never f64/f32.
-rust_decimal = { version = "1.42.1", features = ["serde-with-str"] }
+rust_decimal = { version = "1.43.0", features = ["serde-with-str"] }
 rust_decimal_macros = "1.40.0"
 
 # uuid: v4 for most PKs, v7 for transaction IDs (time-sortable → keyset pagination).
-uuid = { version = "1.26.0", features = ["v4", "v7", "serde"] }
+uuid = { version = "1.29.3", features = ["v4", "v7", "serde"] }
 
 # ─── Date/time ───────────────────────────────────────────────────────
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
 
 # ─── Serialization ───────────────────────────────────────────────────
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 
 # ─── HTTP / Lambda ───────────────────────────────────────────────────
 axum = { version = "0.8.9", features = ["macros"] }
-lambda_http = "1.3.0"
-lambda_runtime = "1.3.0"
+lambda_http = "1.3.2"
+lambda_runtime = "1.5.0"
 tower = "0.5.3"
-tower-http = { version = "0.7.0", features = ["trace", "cors"] }
+tower-http = { version = "0.7.1", features = ["trace", "cors"] }
 
 # ─── Auth ────────────────────────────────────────────────────────────
-jsonwebtoken = "10.4.0"
+jsonwebtoken = "12.0.0"
 
 # ─── Observability ───────────────────────────────────────────────────
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 
 # ─── Error handling ───────────────────────────────────────────────────
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 anyhow = "1.0.104"
 
 # ─── Base64 (cursor encoding for keyset pagination) ────────────────────
-base64 = "0.22"
+base64 = "0.23.1"
 
 # ─── Value objects (strongly-typed primitives with built-in validation) ─────────
-nutype = { version = "0.7", features = ["serde"] }
+nutype = { version = "0.8.0", features = ["serde"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"

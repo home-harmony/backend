@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::value_objects::{display_name::DisplayNameError, family_name::FamilyNameError};
+
 /// Errors that can occur within the domain layer.
 /// These are pure business-rule violations, not I/O or infrastructure errors.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -40,7 +42,9 @@ pub enum DomainError {
     TokenAlreadyUsed,
 
     // ── Debt & Loans (ADR-0008) ──────────────────────────────────────────────────
-    #[error("Invalid payment split: principal ({principal}) + interest ({interest}) != total payment ({total})")]
+    #[error(
+        "Invalid payment split: principal ({principal}) + interest ({interest}) != total payment ({total})"
+    )]
     InvalidPaymentSplit {
         principal: String,
         interest: String,
@@ -54,4 +58,20 @@ pub enum DomainError {
     // ── Generic ──────────────────────────────────────────────────────────────────
     #[error("Invariant violation: {message}")]
     InvariantViolation { message: String },
+}
+
+impl From<FamilyNameError> for DomainError {
+    fn from(err: FamilyNameError) -> Self {
+        Self::InvalidFamilyName {
+            reason: err.to_string(),
+        }
+    }
+}
+
+impl From<DisplayNameError> for DomainError {
+    fn from(err: DisplayNameError) -> Self {
+        Self::InvalidDisplayName {
+            reason: err.to_string(),
+        }
+    }
 }

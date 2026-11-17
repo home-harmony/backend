@@ -8,14 +8,15 @@
 //!
 //! ```text
 //! domain/
-//! ├── entities/       — Aggregate roots and entities
-//! │   ├── family.rs
-//! │   ├── member.rs
-//! │   └── invite_token.rs
+//! ├── entities/       — Aggregate roots and child entities
+//! │   └── family.rs       (Family, FamilyMember, InviteToken)
 //! ├── value_objects/  — Immutable domain values with invariants
-//! │   ├── money.rs
 //! │   ├── currency_code.rs
-//! │   └── role.rs
+//! │   ├── display_name.rs
+//! │   ├── family_name.rs
+//! │   ├── ids.rs          (Typed UUID v4 / v7 identifiers)
+//! │   ├── money.rs
+//! │   └── role.rs         (Role, Permission)
 //! ├── events/         — Domain events emitted by aggregates
 //! │   └── mod.rs
 //! ├── errors.rs       — Domain-level error types
@@ -25,9 +26,10 @@
 //! ## Non-Negotiable Rules
 //!
 //! - Money is **always** [`rust_decimal::Decimal`] — never `f64` or `f32`
-//! - All PKs are [`uuid::Uuid`] (v4 or v7)
+//! - All PKs are strongly-typed UUID v4/v7 wrappers from [`value_objects::ids`]
 //! - Soft-deletes only: `deleted_at: Option<DateTime<Utc>>`
-//! - `family_id` is **never** trusted from client input — extracted from JWT in the API layer
+//! - `family_id` is **never** trusted from unverified client payloads — derived from
+//!   `X-Family-Id` and verified against active `family_members` membership (ADR-0011)
 
 pub mod entities;
 pub mod errors;

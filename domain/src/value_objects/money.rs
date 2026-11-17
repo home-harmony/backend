@@ -1,6 +1,6 @@
 //! `Money` — the core monetary value object.
 //!
-//! # Rules (non-negotiable per GEMINI.md)
+//! # Rules (non-negotiable per AGENTS.md & ADR-0005)
 //!
 //! - Amount is **always** `rust_decimal::Decimal` — never `f64` or `f32`
 //! - Currency safety: arithmetic between two `Money` values requires matching currencies
@@ -172,5 +172,50 @@ mod tests {
         let b = Money::new(dec!(20.50), eur).unwrap();
         let err = a.add(&b).unwrap_err();
         assert!(matches!(err, DomainError::CurrencyMismatch { .. }));
+    }
+
+    #[test]
+    fn zero_is_allowed() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let m = Money::new(dec!(0), usd).unwrap();
+        assert!(m.is_zero());
+    }
+
+    #[test]
+    fn subtraction_can_yield_negative_balance() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let balance = Money::new(dec!(5.00), usd.clone()).unwrap();
+        let charge = Money::new(dec!(10.00), usd).unwrap();
+        let result = balance.sub(&charge).unwrap();
+        assert_eq!(result.amount(), dec!(-5.00));
+    }
+
+    #[test]
+    fn multiply_by_scalar() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let principal = Money::new(dec!(1000.00), usd).unwrap();
+        let with_interest = principal.multiply(dec!(1.05));
+        assert_eq!(with_interest.amount(), dec!(1050.00));
+    }
+
+    #[test]
+    fn display_format() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let m = Money::new(dec!(42.50), usd).unwrap();
+        assert_eq!(m.to_string(), "42.50 USD");
+    }
+
+    #[test]
+    fn from_str_parts() {
+        let m = Money::from_str_parts("123.45", "MDL").unwrap();
+        assert_eq!(m.amount(), dec!(123.45));
+        assert_eq!(m.currency().as_str(), "MDL");
+    }
+
+    #[test]
+    fn zero_constructor() {
+        let m = Money::zero(CurrencyCode::new("EUR").unwrap());
+        assert!(m.is_zero());
+        assert_eq!(m.currency().as_str(), "EUR");
     }
 }

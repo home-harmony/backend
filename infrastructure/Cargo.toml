@@ -1,7 +1,8 @@
 [package]
 name = "infrastructure"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "FamilyLedger — database repositories, external service adapters, and I/O wrappers."
 
 [dependencies]
@@ -35,5 +36,8 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 # DB integration tests run against a real PostgreSQL via testcontainers.
-# RULE (GEMINI.md §15): Do NOT mock database behavior in integration layers.
+# RULE (testing-strategy.md): Do NOT mock database behavior in integration layers.
 tokio = { workspace = true }
+
+[lints]
+workspace = true

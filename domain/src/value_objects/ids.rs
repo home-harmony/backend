@@ -7,23 +7,26 @@
 //!
 //! - **UUID v4 (Random / Unpredictable)**: Used for security tokens (`InviteTokenId`),
 //!   user identity (`UserId`), and low-frequency aggregate roots (`FamilyId`, `MemberId`,
-//!   `AccountId`, `CategoryId`, `LoanId`, `RecurringPaymentId`, `BudgetId`, `GoalId`).
+//!   `AccountId`, `CategoryId`, `LoanKindId`, `LoanId`, `RecurringPaymentId`, `BudgetId`, `GoalId`).
 //!   Prevents timing leakage and tenant enumeration.
 //!
 //! - **UUID v7 (Time-Ordered / Monotonic)**: Used for high-throughput append-only logs,
 //!   time-series records, and keyset-paginated entities (`TransactionId`, `LoanPaymentId`,
-//!   `PlanId`, `RecurringPaymentRecordId`, `GoalContributionId`, `AccountBalanceSnapshotId`).
+//!   `PlanId`, `RecurringPaymentRecordId`, `GoalContributionId`, `AccountBalanceSnapshotId`,
+//!   `ExchangeRateId`).
 //!   Guarantees sequential B-tree writes and eliminates index fragmentation.
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 macro_rules! define_id_v4 {
     ($name:ident, $doc:expr) => {
         #[doc = $doc]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+        )]
         #[serde(transparent)]
         pub struct $name(Uuid);
 
@@ -100,7 +103,9 @@ macro_rules! define_id_v4 {
 macro_rules! define_id_v7 {
     ($name:ident, $doc:expr) => {
         #[doc = $doc]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+        )]
         #[serde(transparent)]
         pub struct $name(Uuid);
 
@@ -207,6 +212,11 @@ define_id_v4!(
 );
 
 define_id_v4!(
+    LoanKindId,
+    "Unique identifier for a system or family-defined loan kind (UUID v4)."
+);
+
+define_id_v4!(
     LoanId,
     "Unique identifier for a registered loan or credit line (UUID v4)."
 );
@@ -226,10 +236,7 @@ define_id_v4!(
     "Unique identifier for a budget envelope (UUID v4)."
 );
 
-define_id_v4!(
-    GoalId,
-    "Unique identifier for a savings goal (UUID v4)."
-);
+define_id_v4!(GoalId, "Unique identifier for a savings goal (UUID v4).");
 
 // ─── UUID v7 Identifiers (Time-Ordered / Monotonic) ──────────────────────────
 
@@ -262,6 +269,17 @@ define_id_v7!(
     AccountBalanceSnapshotId,
     "Unique time-sortable identifier for a periodic account balance snapshot (UUID v7)."
 );
+
+define_id_v7!(
+    ExchangeRateId,
+    "Unique time-sortable identifier for an exchange rate record (UUID v7)."
+);
+
+/// Alias matching `bounded-contexts.md` naming for [`AccountBalanceSnapshotId`].
+pub type SnapshotId = AccountBalanceSnapshotId;
+
+/// Alias matching `bounded-contexts.md` naming for [`GoalContributionId`].
+pub type ContributionId = GoalContributionId;
 
 #[cfg(test)]
 mod tests {
@@ -309,4 +327,3 @@ mod tests {
         assert_eq!(deserialized, family_id);
     }
 }
-
