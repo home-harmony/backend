@@ -9,7 +9,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::value_objects::{FamilyId, InviteTokenId, MemberId, Permission, Role, UserId};
+use crate::value_objects::{
+    CurrencyCode, FamilyId, FamilyName, InviteTokenId, MemberId, Permission, Role, UserId,
+};
 
 /// All domain events emitted across all bounded contexts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,8 +20,8 @@ pub enum DomainEvent {
     // ── Sprint 1: Identity & Family context ─────────────────────────────────────
     FamilyCreated {
         family_id: FamilyId,
-        name: String,
-        home_currency: String,
+        name: FamilyName,
+        home_currency: CurrencyCode,
         occurred_at: DateTime<Utc>,
     },
     MemberInvited {
@@ -106,5 +108,47 @@ impl DomainEvent {
             | DomainEvent::MemberRoleChanged { occurred_at, .. }
             | DomainEvent::MemberRemoved { occurred_at, .. } => *occurred_at,
         }
+    }
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn family_created_serializes_typed_fields_as_strings_and_validates_on_deserialize() {
+        let family_id = FamilyId::new_v4();
+        let occurred_at = Utc::now();
+        let event = DomainEvent::FamilyCreated {
+            family_id,
+            name: FamilyName::try_new("Smith Family").unwrap(),
+            home_currency: CurrencyCode::new("USD").unwrap(),
+            occurred_at,
+        };
+
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["event_type"], "family_created");
+        assert_eq!(json["name"], "Smith Family");
+        assert_eq!(json["home_currency"], "USD");
+
+        let round_tripped: DomainEvent = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(round_tripped.family_id(), family_id);
+        assert!(matches!(
+            round_tripped,
+            DomainEvent::FamilyCreated {
+                ref name,
+                ref home_currency,
+                ..
+            } if name.as_ref() == "Smith Family" && home_currency.as_str() == "USD"
+        ));
+
+        let mut bad_currency = json.clone();
+        bad_currency["home_currency"] = serde_json::json!("usd");
+        assert!(serde_json::from_value::<DomainEvent>(bad_currency).is_err());
+
+        let mut empty_name = json;
+        empty_name["name"] = serde_json::json!("   ");
+        assert!(serde_json::from_value::<DomainEvent>(empty_name).is_err());
     }
 }

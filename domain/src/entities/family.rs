@@ -18,8 +18,8 @@ use crate::{
     errors::DomainError,
     events::DomainEvent,
     value_objects::{
-        CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, MemberId, Permission, Role,
-        UserId,
+        CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, InviteTtl, MemberId,
+        Permission, Relationship, Role, UserId,
     },
 };
 
@@ -57,8 +57,8 @@ pub struct FamilyMember {
     pub role: Role,
     /// Custom capability flags (only used when `role == Role::Other`).
     pub permissions: Vec<Permission>,
-    /// Optional label for `Role::Other` members (e.g., "Grandma", "Cousin").
-    pub relationship: Option<String>,
+    /// Optional family relationship label for any member (e.g., "Spouse", "Daughter", "Grandma", "Cousin").
+    pub relationship: Option<Relationship>,
     pub joined_at: DateTime<Utc>,
     /// Soft-delete — never hard-delete members.
     pub deleted_at: Option<DateTime<Utc>>,
@@ -73,7 +73,8 @@ pub struct InviteToken {
     pub role: Role,
     /// Custom capability flags (only used when `role == Role::Other`).
     pub permissions: Vec<Permission>,
-    pub relationship: Option<String>,
+    /// Optional family relationship label (e.g., "Spouse", "Daughter", "Grandma", "Cousin").
+    pub relationship: Option<Relationship>,
     /// References `family_members.id` of the member who created the invite.
     pub created_by: MemberId,
     pub created_at: DateTime<Utc>,
@@ -122,17 +123,19 @@ impl Family {
     /// Creates a new invite token for a prospective member.
     ///
     /// Only `Owner` can invite members, `role` cannot be `Owner`, custom
-    /// `permissions` are allowed only for `Role::Other`, and `ttl` must be positive.
+    /// `permissions` are allowed only for `Role::Other`, `relationship` is an
+    /// optional label allowed for any role, and [`InviteTtl`] guarantees a
+    /// positive expiration duration.
     pub fn create_invite(
         &mut self,
         created_by_user_id: UserId,
         role: Role,
         permissions: Vec<Permission>,
-        relationship: Option<String>,
-        ttl: chrono::Duration,
+        relationship: Option<Relationship>,
+        ttl: InviteTtl,
     ) -> Result<(InviteToken, Vec<DomainEvent>), DomainError> {
         let creator_member_id = self.authorize_owner(created_by_user_id)?;
-        validate_invite_params(role, &permissions, ttl)?;
+        validate_invite_params(role, &permissions)?;
 
         let now = Utc::now();
         let token = InviteTokenId::new_v4();
@@ -144,7 +147,7 @@ impl Family {
             relationship,
             created_by: creator_member_id,
             created_at: now,
-            expires_at: now + ttl,
+            expires_at: now + ttl.as_duration(),
             used: false,
         };
         self.invite_tokens.push(invite.clone());
@@ -258,9 +261,7 @@ impl Family {
             .members
             .iter()
             .find(|m| m.user_id == user_id && m.deleted_at.is_none())
-            .ok_or(DomainError::MemberNotFound {
-                member_id: user_id.to_string(),
-            })?;
+            .ok_or(DomainError::UserNotInFamily { user_id })?;
         member.role.assert_family_management()?;
         Ok(member.id)
     }
@@ -269,7 +270,7 @@ impl Family {
         &mut self,
         token: InviteTokenId,
         now: DateTime<Utc>,
-    ) -> Result<(Role, Vec<Permission>, Option<String>), DomainError> {
+    ) -> Result<(Role, Vec<Permission>, Option<Relationship>), DomainError> {
         let invite = self
             .invite_tokens
             .iter_mut()
@@ -301,7 +302,7 @@ impl Family {
             .iter_mut()
             .find(|m| m.id == target_member_id && m.deleted_at.is_none())
             .ok_or(DomainError::MemberNotFound {
-                member_id: target_member_id.to_string(),
+                member_id: target_member_id,
             })
     }
 }
@@ -349,8 +350,8 @@ fn build_creation_events(
     vec![
         DomainEvent::FamilyCreated {
             family_id,
-            name: name.as_ref().to_owned(),
-            home_currency: home_currency.to_string(),
+            name: name.clone(),
+            home_currency: home_currency.clone(),
             occurred_at,
         },
         DomainEvent::MemberJoined {
@@ -363,22 +364,13 @@ fn build_creation_events(
     ]
 }
 
-fn validate_invite_params(
-    role: Role,
-    permissions: &[Permission],
-    ttl: chrono::Duration,
-) -> Result<(), DomainError> {
+fn validate_invite_params(role: Role, permissions: &[Permission]) -> Result<(), DomainError> {
     if role == Role::Owner {
         return Err(DomainError::DuplicateOwner);
     }
     if role != Role::Other && !permissions.is_empty() {
         return Err(DomainError::InvariantViolation {
             message: "Custom permissions can only be configured for Role::Other".to_string(),
-        });
-    }
-    if ttl <= chrono::Duration::zero() {
-        return Err(DomainError::InvariantViolation {
-            message: "Invite expiration duration must be positive".to_string(),
         });
     }
     Ok(())
@@ -427,7 +419,7 @@ mod tests {
                 Role::Member,
                 Vec::new(),
                 None,
-                chrono::Duration::hours(48),
+                InviteTtl::from_hours(48).unwrap(),
             )
             .unwrap();
         let member_user_id = UserId::new_v4();
@@ -441,9 +433,12 @@ mod tests {
             Role::Child,
             Vec::new(),
             None,
-            chrono::Duration::hours(24),
+            InviteTtl::from_hours(24).unwrap(),
         );
-        assert!(matches!(result, Err(DomainError::InsufficientRole { .. })));
+        assert!(matches!(
+            result,
+            Err(DomainError::InsufficientRole { role: Role::Member })
+        ));
     }
 
     #[test]
@@ -454,7 +449,7 @@ mod tests {
             Role::Owner,
             Vec::new(),
             None,
-            chrono::Duration::hours(24),
+            InviteTtl::from_hours(24).unwrap(),
         );
         assert!(matches!(result, Err(DomainError::DuplicateOwner)));
     }
@@ -467,7 +462,7 @@ mod tests {
             Role::Member,
             vec![Permission::ViewLoans],
             None,
-            chrono::Duration::hours(24),
+            InviteTtl::from_hours(24).unwrap(),
         );
         assert!(matches!(
             result,
@@ -480,18 +475,20 @@ mod tests {
         let (mut family, owner_id) = make_family();
         let owner_member_id = family.members[0].id;
         let perms = vec![Permission::ViewBudget, Permission::RecordOwnTransactions];
+        let relationship = Relationship::try_new("Grandma").unwrap();
 
         let (invite, _) = family
             .create_invite(
                 owner_id,
                 Role::Other,
                 perms.clone(),
-                Some("Grandma".to_string()),
-                chrono::Duration::hours(48),
+                Some(relationship.clone()),
+                InviteTtl::from_hours(48).unwrap(),
             )
             .unwrap();
         assert_eq!(invite.created_by, owner_member_id);
         assert_eq!(invite.permissions, perms);
+        assert_eq!(invite.relationship.as_ref(), Some(&relationship));
 
         let (member, _) = family
             .accept_invite(
@@ -501,37 +498,43 @@ mod tests {
             )
             .unwrap();
         assert_eq!(member.permissions, perms);
+        assert_eq!(member.relationship, Some(relationship));
         assert!(member.has_permission(Permission::ViewBudget));
         assert!(!member.has_permission(Permission::ViewLoans));
     }
 
     #[test]
-    fn invite_with_zero_or_negative_ttl_is_rejected() {
+    fn relationship_is_allowed_on_non_other_roles() {
         let (mut family, owner_id) = make_family();
+        let relationship = Relationship::try_new("Spouse").unwrap();
 
-        let zero_ttl = family.create_invite(
-            owner_id,
-            Role::Member,
-            Vec::new(),
-            None,
-            chrono::Duration::zero(),
-        );
-        assert!(matches!(
-            zero_ttl,
-            Err(DomainError::InvariantViolation { .. })
-        ));
+        let (invite, _) = family
+            .create_invite(
+                owner_id,
+                Role::Member,
+                Vec::new(),
+                Some(relationship.clone()),
+                InviteTtl::from_hours(48).unwrap(),
+            )
+            .unwrap();
+        let (member, _) = family
+            .accept_invite(
+                invite.token,
+                UserId::new_v4(),
+                DisplayName::try_new("Partner").unwrap(),
+            )
+            .unwrap();
 
-        let negative_ttl = family.create_invite(
-            owner_id,
-            Role::Member,
-            Vec::new(),
-            None,
-            chrono::Duration::hours(-1),
-        );
-        assert!(matches!(
-            negative_ttl,
-            Err(DomainError::InvariantViolation { .. })
-        ));
+        assert_eq!(member.role, Role::Member);
+        assert_eq!(member.relationship, Some(relationship));
+    }
+
+    #[test]
+    fn invite_ttl_zero_or_negative_is_rejected_by_value_object() {
+        assert!(InviteTtl::try_from_duration(chrono::Duration::zero()).is_err());
+        assert!(InviteTtl::try_from_duration(chrono::Duration::hours(-1)).is_err());
+        assert!(InviteTtl::from_hours(0).is_err());
+        assert!(InviteTtl::from_hours(-1).is_err());
     }
 
     #[test]
@@ -543,7 +546,7 @@ mod tests {
                 Role::Member,
                 Vec::new(),
                 None,
-                chrono::Duration::hours(48),
+                InviteTtl::from_hours(48).unwrap(),
             )
             .unwrap();
 
@@ -571,6 +574,49 @@ mod tests {
     }
 
     #[test]
+    fn non_member_caller_returns_user_not_in_family_and_missing_target_returns_member_not_found() {
+        let (mut family, owner_id) = make_family();
+        let outsider_user_id = UserId::new_v4();
+        let unknown_member_id = MemberId::new_v4();
+
+        let invite_err = family
+            .create_invite(
+                outsider_user_id,
+                Role::Member,
+                Vec::new(),
+                None,
+                InviteTtl::from_hours(24).unwrap(),
+            )
+            .unwrap_err();
+        assert_eq!(
+            invite_err,
+            DomainError::UserNotInFamily {
+                user_id: outsider_user_id
+            }
+        );
+
+        let remove_outsider_err = family
+            .remove_member(outsider_user_id, unknown_member_id)
+            .unwrap_err();
+        assert_eq!(
+            remove_outsider_err,
+            DomainError::UserNotInFamily {
+                user_id: outsider_user_id
+            }
+        );
+
+        let missing_target_err = family
+            .remove_member(owner_id, unknown_member_id)
+            .unwrap_err();
+        assert_eq!(
+            missing_target_err,
+            DomainError::MemberNotFound {
+                member_id: unknown_member_id
+            }
+        );
+    }
+
+    #[test]
     fn owner_cannot_change_own_role_away_from_owner() {
         let (mut family, owner_id) = make_family();
         let owner_member_id = family.members[0].id;
@@ -588,7 +634,7 @@ mod tests {
                 Role::Member,
                 Vec::new(),
                 None,
-                chrono::Duration::hours(48),
+                InviteTtl::from_hours(48).unwrap(),
             )
             .unwrap();
         let (member, _) = family
@@ -612,7 +658,7 @@ mod tests {
                 Role::Member,
                 Vec::new(),
                 None,
-                chrono::Duration::hours(48),
+                InviteTtl::from_hours(48).unwrap(),
             )
             .unwrap();
         let (member, _) = family
@@ -636,10 +682,18 @@ mod tests {
         let currency = CurrencyCode::new("MDL").unwrap();
         let name = FamilyName::try_new("My Family").unwrap();
         let owner_name = DisplayName::try_new("Ana").unwrap();
-        let (_, events) = Family::create(name, currency, owner_id, owner_name).unwrap();
+        let (_, events) =
+            Family::create(name.clone(), currency.clone(), owner_id, owner_name).unwrap();
 
         assert_eq!(events.len(), 2);
-        assert!(matches!(events[0], DomainEvent::FamilyCreated { .. }));
+        assert!(matches!(
+            &events[0],
+            DomainEvent::FamilyCreated {
+                name: event_name,
+                home_currency: event_currency,
+                ..
+            } if event_name == &name && event_currency == &currency
+        ));
         assert!(matches!(events[1], DomainEvent::MemberJoined { .. }));
     }
 }

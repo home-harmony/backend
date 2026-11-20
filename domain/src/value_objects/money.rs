@@ -43,9 +43,7 @@ impl Money {
     /// Returns [`DomainError::NegativeAmount`] if `amount` is negative.
     pub fn new(amount: Decimal, currency: CurrencyCode) -> Result<Self, DomainError> {
         if amount < Decimal::ZERO {
-            return Err(DomainError::NegativeAmount {
-                amount: amount.to_string(),
-            });
+            return Err(DomainError::NegativeAmount { amount });
         }
         Ok(Self { amount, currency })
     }
@@ -119,8 +117,8 @@ impl Money {
     fn assert_same_currency(&self, other: &Self) -> Result<(), DomainError> {
         if self.currency != other.currency {
             Err(DomainError::CurrencyMismatch {
-                expected: self.currency.to_string(),
-                actual: other.currency.to_string(),
+                expected: self.currency.clone(),
+                actual: other.currency.clone(),
             })
         } else {
             Ok(())

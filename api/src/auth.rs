@@ -18,8 +18,9 @@ use axum::{
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Json, Response},
 };
-use domain::value_objects::{FamilyId, Permission, Role, UserId};
 use serde::{Deserialize, Serialize};
+
+use domain::value_objects::{Email, FamilyId, Permission, Role, UserId};
 
 /// Authenticated caller and verified family workspace context.
 ///
@@ -43,8 +44,8 @@ pub struct AuthClaims {
     /// Granular permission flags for `Role::Other` members (from `family_members.permissions`).
     pub permissions: Vec<Permission>,
 
-    /// User's email address from the Cognito JWT `email` claim.
-    pub email: String,
+    /// User's validated and normalized email address from the Cognito JWT `email` claim.
+    pub email: Email,
 }
 
 /// Axum extractor that reads `AuthClaims` from request extensions.
@@ -88,7 +89,7 @@ pub enum AuthError {
     InvalidClaims(String),
 
     #[error("Insufficient permissions for role: {0}")]
-    Forbidden(String),
+    Forbidden(Role),
 }
 
 impl IntoResponse for AuthError {
@@ -105,5 +106,58 @@ impl IntoResponse for AuthError {
         }
 
         (status, Json(Body { error: message })).into_response()
+    }
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_claims_json(email: &str) -> serde_json::Value {
+        serde_json::json!({
+            "user_id": UserId::new_v4(),
+            "family_id": FamilyId::new_v4(),
+            "role": "member",
+            "permissions": [],
+            "email": email
+        })
+    }
+
+    #[test]
+    fn auth_claims_serde_normalizes_and_round_trips_email() {
+        let claims: AuthClaims =
+            serde_json::from_value(sample_claims_json("  Alice@Example.COM  ")).unwrap();
+        assert_eq!(claims.email.as_ref(), "alice@example.com");
+
+        let serialized = serde_json::to_value(&claims).unwrap();
+        assert_eq!(serialized["email"], "alice@example.com");
+    }
+
+    #[test]
+    fn auth_claims_rejects_invalid_or_empty_email() {
+        assert!(serde_json::from_value::<AuthClaims>(sample_claims_json("")).is_err());
+        assert!(serde_json::from_value::<AuthClaims>(sample_claims_json("not-an-email")).is_err());
+    }
+
+    #[test]
+    fn auth_error_maps_to_expected_http_statuses() {
+        assert_eq!(
+            AuthError::MissingClaims.into_response().status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            AuthError::InvalidClaims("bad token".to_string())
+                .into_response()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let forbidden = AuthError::Forbidden(Role::Child);
+        assert_eq!(
+            forbidden.to_string(),
+            "Insufficient permissions for role: child"
+        );
+        assert_eq!(forbidden.into_response().status(), StatusCode::FORBIDDEN);
     }
 }

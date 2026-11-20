@@ -1,11 +1,12 @@
 //! `CurrencyCode` — ISO 4217 currency code value object.
 //!
-//! Enforces the invariant: exactly 3 uppercase ASCII letters.
+//! Backed by [`nutype`]: validation runs at construction and deserialization time,
+//! enforcing the invariant of exactly 3 uppercase ASCII letters.
 //! Examples: "USD", "EUR", "MDL"
 
+use nutype::nutype;
+
 use crate::errors::DomainError;
-use serde::{Deserialize, Serialize};
-use std::fmt;
 
 /// An ISO 4217 currency code. Always exactly 3 uppercase ASCII letters.
 ///
@@ -21,31 +22,35 @@ use std::fmt;
 /// assert!(CurrencyCode::new("us").is_err());   // lowercase
 /// assert!(CurrencyCode::new("USDD").is_err()); // too long
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[nutype(
+    sanitize(trim),
+    validate(predicate = is_valid_currency_code),
+    derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Hash,
+        AsRef,
+        Display,
+        Into,
+        Serialize,
+        Deserialize
+    )
+)]
 pub struct CurrencyCode(String);
 
 impl CurrencyCode {
     /// Creates a new `CurrencyCode`, validating the format.
     pub fn new(code: &str) -> Result<Self, DomainError> {
-        let code = code.trim();
-        if code.len() == 3 && code.chars().all(|c| c.is_ascii_uppercase()) {
-            Ok(Self(code.to_owned()))
-        } else {
-            Err(DomainError::InvalidCurrencyCode {
-                code: code.to_owned(),
-            })
-        }
+        Self::try_new(code).map_err(|_| DomainError::InvalidCurrencyCode {
+            code: code.trim().to_owned(),
+        })
     }
 
     /// Returns the inner string slice.
     pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for CurrencyCode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        self.as_ref()
     }
 }
 
@@ -63,6 +68,10 @@ impl TryFrom<&str> for CurrencyCode {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::new(value)
     }
+}
+
+fn is_valid_currency_code(code: &str) -> bool {
+    code.len() == 3 && code.bytes().all(|b| b.is_ascii_uppercase())
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -102,5 +111,19 @@ mod tests {
         let a = CurrencyCode::new("USD").unwrap();
         let b = CurrencyCode::new("USD").unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn serde_validates_on_deserialization() {
+        let usd: CurrencyCode = serde_json::from_str("\"USD\"").unwrap();
+        assert_eq!(usd.as_str(), "USD");
+
+        let trimmed: CurrencyCode = serde_json::from_str("\" MDL \"").unwrap();
+        assert_eq!(trimmed.as_str(), "MDL");
+
+        assert!(serde_json::from_str::<CurrencyCode>("\"\"").is_err());
+        assert!(serde_json::from_str::<CurrencyCode>("\"usd\"").is_err());
+        assert!(serde_json::from_str::<CurrencyCode>("\"US\"").is_err());
+        assert!(serde_json::from_str::<CurrencyCode>("\"USDD\"").is_err());
     }
 }

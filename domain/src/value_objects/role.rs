@@ -119,9 +119,7 @@ impl Role {
         if self.can_access_debt_features() {
             Ok(())
         } else {
-            Err(DomainError::InsufficientRole {
-                role: self.to_string(),
-            })
+            Err(DomainError::InsufficientRole { role: *self })
         }
     }
 
@@ -130,9 +128,7 @@ impl Role {
         if self.can_manage_family() {
             Ok(())
         } else {
-            Err(DomainError::InsufficientRole {
-                role: self.to_string(),
-            })
+            Err(DomainError::InsufficientRole { role: *self })
         }
     }
 }
