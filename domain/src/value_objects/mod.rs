@@ -22,4 +22,4 @@ pub use ids::*;
 pub use invite_ttl::InviteTtl;
 pub use money::Money;
 pub use relationship::Relationship;
-pub use role::{Permission, Role};
+pub use role::{DomainAction, Permission, Role};

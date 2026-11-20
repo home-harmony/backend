@@ -1,62 +1,48 @@
-# Backend (Rust & Aurora DSQL) Rules
+# AGENTS.md — HomeHarmony (`backend/` Rust & Aurora DSQL Entry Point)
 
-> Applies to all Rust crates in `backend/` (`domain`, `infrastructure`, `api`, `lambdas/*`) and SQL migrations in `backend/migrations/`.
-
----
-
-## 1. Hexagonal Crate Boundaries & Ports
-
-- **Pure Domain (`domain/`)**: Zero SQL (`sqlx`), HTTP (`axum`), filesystem, or AWS SDK dependencies.
-- **Port Placement & Static Dispatch (RPITIT)**:
-  - Declare repository/service port traits in `domain/` using native async RPITIT (`fn find(...) -> impl Future<Output = ...> + Send`).
-  - Inject dependencies via generic type parameters (static dispatch) rather than `Arc<dyn Trait>` where possible; keep domain ports `Send + Sync` (free of `'static`), and require `'static` only on Axum HTTP state/application service traits.
-- **Concurrency**: `tokio::spawn` and background tasks belong exclusively in `infrastructure/`, never in `domain/`.
+> Entry point for AI agents working in `backend/`.
+> Also read cross-repo governance and domain rules in [`../documentation/AGENTS.md`](../documentation/AGENTS.md) and [`../documentation/.ai/rules/common.md`](../documentation/.ai/rules/common.md).
 
 ---
 
-## 2. Aurora DSQL & Persistence Invariants
+## 1. Reading Order
 
-- **Primary Keys**: UUID v4 (`gen_random_uuid()`) for low-frequency aggregates/tokens; time-ordered **UUID v7 (`Uuid::now_v7()`)** for transactions and append logs. Never use `SERIAL` / monotonic sequences.
-- **Schema Features**: Explicit `FOREIGN KEY (...) REFERENCES ...` and native `JSONB` columns are supported; always qualify queries with `WHERE family_id = $1`.
-- **Soft-Deletes**: Use `deleted_at TIMESTAMPTZ NULL` (`ON DELETE RESTRICT`); never hard-delete business records or use `TRUNCATE`.
-- **Migrations & DDL**:
-  - Filename format: `{YYYYMMDDHHMMSS}_{description}.sql`.
-  - **Exactly 1 DDL statement per migration file**. Never mix DDL and DML. Never edit already-applied migrations.
-  - All secondary indexes must use **`CREATE INDEX ASYNC`** in dedicated migration files.
-- **Transactions & Pagination**:
-  - Wrap mutating transactions in `aurora_dsql_sqlx_connector::retry_on_occ` (auto-retries SQLSTATE `40001`); keep batch writes $\le 500$ rows.
-  - Use **`BEGIN READ ONLY`** for all read-only endpoints.
-  - **Keyset Pagination Only**: `OFFSET` is strictly banned; use `(occurred_at, id) < ($2, $3)` with limit $\le 50$.
-  - All SQL queries must be parameterized (`sqlx`); dynamic SQL string concatenation is forbidden.
+1. [`README.md`](./README.md) — workspace crates & developer commands
+2. [`.ai/rules/backend-rust.md`](./.ai/rules/backend-rust.md) — hexagonal crates, Deep Modules, RPITIT, `nutype`, `Decimal`, SLAP/Newspaper layout
+3. [`.ai/rules/aurora-dsql.md`](./.ai/rules/aurora-dsql.md) — UUID v4/v7, 1-DDL-per-file, `CREATE INDEX ASYNC`, OCC retry, `BEGIN READ ONLY`, keyset
+4. [`../documentation/domain/ubiquitous-language.md`](../documentation/domain/ubiquitous-language.md) — canonical domain terms, formulas, and 10 invariants
+5. [`specs/README.md`](./specs/README.md) — self-contained behavior specifications governing tests
 
 ---
 
-## 3. Type Safety & Value Objects
+## 2. Rules & Skills Index
 
-- **Mandatory `nutype` / Typed IDs**: Every domain identifier (`FamilyId`, `MemberId`, `TransactionId`) and constrained value object (`FamilyName`, `DisplayName`, `Email`) must use `nutype` or strongly-typed UUID newtypes. Never pass raw `String`, `Uuid`, or `i64` in domain signatures.
-- **Exact Money**: Monetary values must always use `rust_decimal::Decimal` (`Money` VO). **`f32` and `f64` are strictly banned.**
-- **Deterministic Collections**: Use `indexmap::{IndexMap, IndexSet}` when field or insertion order must be preserved.
+### A. Modular Rules (Always Enforced)
+- **Common & Governance**: [`../documentation/.ai/rules/common.md`](../documentation/.ai/rules/common.md)
+- **Backend Rust**: [`.ai/rules/backend-rust.md`](./.ai/rules/backend-rust.md)
+- **Aurora DSQL**: [`.ai/rules/aurora-dsql.md`](./.ai/rules/aurora-dsql.md)
+
+### B. Skills (Auto-Discovered via `.agents/skills.json`)
+
+| Scope | Task | Skill (`SKILL.md`) |
+| :--- | :--- | :--- |
+| **Backend** | Design or refactor clean Rust modules (`nutype`, RPITIT, SLAP, Newspaper layout) | [`.ai/skills/rust-patterns/SKILL.md`](./.ai/skills/rust-patterns/SKILL.md) |
+| **Backend** | Execute Red-Green-Refactor TDD & blind spec tests across Layer 1 / 2a / 2b seams | [`.ai/skills/rust-testing/SKILL.md`](./.ai/skills/rust-testing/SKILL.md) |
+| **Backend** | Author Aurora DSQL migrations (`1 DDL/file`), async indexes, OCC/keyset SQLx queries | [`.ai/skills/dsql-migrations/SKILL.md`](./.ai/skills/dsql-migrations/SKILL.md) |
+| **Backend** | Reproduce and isolate bugs scientifically (*"no red test, no theories"*) | [`.ai/skills/diagnosing-bugs/SKILL.md`](./.ai/skills/diagnosing-bugs/SKILL.md) |
+| **Cross-Repo** | Align domain glossary, research primary sources, or propose an ADR | [`../documentation/.ai/skills/domain-and-adr/SKILL.md`](../documentation/.ai/skills/domain-and-adr/SKILL.md) |
+| **Cross-Repo** | Draft/review `Draft` specs, slice epics vertically, or handle `SPEC–CODE MISMATCH` | [`../documentation/.ai/skills/spec-driven-dev/SKILL.md`](../documentation/.ai/skills/spec-driven-dev/SKILL.md) |
+| **Cross-Repo** | Post-coding 2-axis self-review (Standards vs. Spec) & One-Way Door PR check | [`../documentation/.ai/skills/code-review/SKILL.md`](../documentation/.ai/skills/code-review/SKILL.md) |
 
 ---
 
-## 4. Strict Prohibitions & Anti-Patterns
+## 3. Mandatory Verification Gates
 
-- **Zero `.unwrap()` or `.expect()` in Production Code**: Propagate errors using `?` and `thiserror`. (`.expect("reason")` is allowed only in test setup).
-- **No `Deref` Polymorphism**: Never implement `Deref` to simulate inheritance.
-- **No Unjustified `.clone()`**: Do not call `.clone()` merely to silence the borrow checker; prefer borrowed slices (`&str`, `&[T]`) or moving owned values.
-- **No `#![deny(warnings)]` in Crates**: Enforce zero warnings via `cargo clippy --workspace --all-targets -- -D warnings`.
-
----
-
-## 5. Clean Code Metrics (SRP / SLAP) & Newspaper File Layout
-
-- **Function Metrics**:
-  - Target: **10–30 lines** per function (hard ceiling: **40 lines**).
-  - Max nesting depth: **2 levels**. Use guard clauses (`?`, `let ... else { return ... }`) to fail fast at the top.
-- **Single Level of Abstraction (SLAP)**: High-level orchestrators coordinate workflow steps; private worker helpers handle low-level parsing, loops, or SQL mapping.
-- **Newspaper File Ordering** (top-to-bottom in every `.rs` file):
-  1. **Imports**: `std` $\rightarrow$ external crates $\rightarrow$ workspace crates (`domain`, `crate::...`)
-  2. **Types**: Constants, statics, type aliases, structs, enums
-  3. **Implementations**: Inherent `impl`s first, trait `impl`s second
-  4. **Functions**: Public entry points/orchestrators first, followed top-down by private leaf helpers
-  5. **Tests**: `#[cfg(test)] mod tests { ... }` at the bottom
+Before finishing any code change:
+```bash
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+- `cargo test --workspace` includes `domain --test spec_traceability`, enforcing all 4 automated guardrails against `./specs/` (blocks tests on `Draft` rules, `Origin: observed` approvals, unresolved `Open Questions` approvals, and enforces 1:1 coverage for `Approved` rules).
+- Run [`code-review`](../documentation/.ai/skills/code-review/SKILL.md) after every coding change.
+- Put temporary scratch notes in `.ai/local/` (gitignored).

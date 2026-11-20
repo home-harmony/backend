@@ -4,8 +4,8 @@
 //!
 //! - Amount is **always** `rust_decimal::Decimal` — never `f64` or `f32`
 //! - Currency safety: arithmetic between two `Money` values requires matching currencies
-//! - Amount must be non-negative for any monetary value (use signed amounts only where
-//!   the domain explicitly models debt/credit, e.g., account balance)
+//! - Amount must be strictly zero or positive (`>= 0`). Negative values are a property
+//!   of signed account balances (`AccountBalanceSnapshot`), not `Money`.
 //!
 //! # Examples
 //!
@@ -93,15 +93,13 @@ impl Money {
     }
 
     /// Subtracts `other` from `self`. Currencies must match.
-    /// Result may be negative (e.g., a credit card account balance can go negative).
+    ///
+    /// # Errors
+    /// Returns [`DomainError::CurrencyMismatch`] if currencies differ, or
+    /// [`DomainError::NegativeAmount`] if `self.amount < other.amount`.
     pub fn sub(&self, other: &Self) -> Result<Self, DomainError> {
         self.assert_same_currency(other)?;
-        // Note: we allow negative results here since account balances can be negative
-        let amount = self.amount - other.amount;
-        Ok(Self {
-            amount,
-            currency: self.currency.clone(),
-        })
+        Self::new(self.amount - other.amount, self.currency.clone())
     }
 
     /// Multiplies the amount by a scalar factor (e.g., for interest calculations).
@@ -180,12 +178,16 @@ mod tests {
     }
 
     #[test]
-    fn subtraction_can_yield_negative_balance() {
+    fn subtraction_valid_and_below_zero_returns_negative_amount_error() {
         let usd = CurrencyCode::new("USD").unwrap();
+        let high = Money::new(dec!(50.00), usd.clone()).unwrap();
+        let low = Money::new(dec!(20.00), usd.clone()).unwrap();
+        assert_eq!(high.sub(&low).unwrap().amount(), dec!(30.00));
+
         let balance = Money::new(dec!(5.00), usd.clone()).unwrap();
         let charge = Money::new(dec!(10.00), usd).unwrap();
-        let result = balance.sub(&charge).unwrap();
-        assert_eq!(result.amount(), dec!(-5.00));
+        let err = balance.sub(&charge).unwrap_err();
+        assert!(matches!(err, DomainError::NegativeAmount { .. }));
     }
 
     #[test]

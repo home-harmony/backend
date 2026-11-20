@@ -13,6 +13,7 @@
 .env.*
 !.env.example
 .aws-resources.md
+.ai/local/
 
 # IDE
 .idea/

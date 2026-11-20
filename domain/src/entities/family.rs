@@ -18,8 +18,8 @@ use crate::{
     errors::DomainError,
     events::DomainEvent,
     value_objects::{
-        CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, InviteTtl, MemberId,
-        Permission, Relationship, Role, UserId,
+        CurrencyCode, DisplayName, DomainAction, FamilyId, FamilyName, InviteTokenId, InviteTtl,
+        MemberId, Permission, Relationship, Role, UserId,
     },
 };
 
@@ -317,6 +317,31 @@ impl FamilyMember {
     pub fn has_permission(&self, perm: Permission) -> bool {
         self.role.has_permission(&self.permissions, perm)
     }
+
+    /// Evaluates any [`DomainAction`] for this member using their role and custom permissions.
+    pub fn can_perform(&self, action: DomainAction) -> bool {
+        self.role.can_perform(&self.permissions, action)
+    }
+
+    /// Returns `true` if this member can access debt/loan features.
+    pub fn can_access_debt_features(&self) -> bool {
+        self.role.can_access_debt_features(&self.permissions)
+    }
+
+    /// Asserts that this member may access debt/loan features.
+    pub fn assert_debt_access(&self) -> Result<(), DomainError> {
+        self.role.assert_debt_access(&self.permissions)
+    }
+
+    /// Returns `true` if this member can view family-level reports.
+    pub fn can_view_family_reports(&self) -> bool {
+        self.role.can_view_family_reports(&self.permissions)
+    }
+
+    /// Returns `true` if this member can manage own payment accounts.
+    pub fn can_manage_accounts(&self) -> bool {
+        self.role.can_manage_accounts(&self.permissions)
+    }
 }
 
 fn build_owner_member(
@@ -501,6 +526,11 @@ mod tests {
         assert_eq!(member.relationship, Some(relationship));
         assert!(member.has_permission(Permission::ViewBudget));
         assert!(!member.has_permission(Permission::ViewLoans));
+        assert!(!member.can_access_debt_features());
+        assert!(matches!(
+            member.assert_debt_access(),
+            Err(DomainError::InsufficientRole { role: Role::Other })
+        ));
     }
 
     #[test]

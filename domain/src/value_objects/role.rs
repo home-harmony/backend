@@ -1,28 +1,40 @@
-//! `Role` and `Permission` — family member authorization value objects.
+//! `Role`, `Permission`, and compile-time `DomainAction` authorization matrix.
 //!
-//! Roles and permissions determine what actions a family member can perform.
-//! Authorization is enforced at the **API layer** — Lambdas check the role and
-//! permissions resolved for `(user_id, family_id)` in `family_members`.
+//! All authorization checks evaluate through a single exhaustive 4-column matrix
+//! in [`action_policy`], giving O(1) lookup and compile-time safety whenever a new
+//! `Permission`, `Role`, or `DomainAction` is added.
 //!
-//! # Role Hierarchy
+//! # Authorization Matrix (4 Roles × 9 Actions)
 //!
-//! ```text
-//! Owner  — full control: all 8 permissions + family management
-//! Member — adult member: all 8 permissions
-//! Other  — extended family / caretaker: Owner-configured subset of the 8 permissions
-//! Child  — restricted: RecordOwnTransactions + ManageOwnAccounts only;
-//!          BLOCKED from loans, debt plans, budgets, and family reports
-//! ```
+//! | Action / Permission      | `Owner` | `Member` | `Child` | `Other`  |
+//! | :----------------------- | :-----: | :------: | :-----: | :------: |
+//! | `RecordOwnTransactions`  | Allow   | Allow    | Allow   | Custom*  |
+//! | `ManageOwnAccounts`      | Allow   | Allow    | Allow   | Custom*  |
+//! | `RecordAnyTransaction`   | Allow   | Allow    | Deny    | Custom*  |
+//! | `ViewAllTransactions`    | Allow   | Allow    | Deny    | Custom*  |
+//! | `ViewAllAccounts`        | Allow   | Allow    | Deny    | Custom*  |
+//! | `ViewLoans`              | Allow   | Allow    | Deny    | Custom*  |
+//! | `ViewBudget`             | Allow   | Allow    | Deny    | Custom*  |
+//! | `ViewReports`            | Allow   | Allow    | Deny    | Custom*  |
+//! | `ManageFamily`           | Allow   | Deny     | Deny    | Deny     |
+//!
+//! \* **`Custom`**: allowed only when the `Permission` flag is explicitly present
+//! in the member's `family_members.permissions` list (`custom_permissions`).
 
-use crate::errors::DomainError;
-use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Granular capability flags for family members.
+use serde::{Deserialize, Serialize};
+
+use crate::errors::DomainError;
+
+/// Granular capability flags for family ledger, account, budget, loan, and reporting access.
 ///
-/// Predefined roles (`Owner`, `Member`, `Child`) have fixed permission sets.
-/// For `Role::Other` members, the Owner configures a subset of these flags
+/// Predefined roles (`Owner`, `Member`, `Child`) have fixed rules in [`action_policy`].
+/// For `Role::Other` members, the Family `Owner` grants a subset of these flags
 /// at invite time (stored as JSONB in `family_members.permissions`).
+///
+/// Note: Family membership administration (`ManageFamily`) is intentionally **not** a
+/// `Permission` flag—it is strictly reserved for `Role::Owner`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Permission {
@@ -36,8 +48,42 @@ pub enum Permission {
     ViewReports,
 }
 
+/// Family workspace role assigned to each [`FamilyMember`](crate::entities::FamilyMember).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    /// Creator/administrator: all 8 ledger/view permissions plus exclusive `ManageFamily`.
+    Owner,
+    /// Adult household member: all 8 ledger/view permissions, no `ManageFamily`.
+    Member,
+    /// Restricted member: own transactions and own accounts only; blocked from loans/budgets/reports.
+    Child,
+    /// Extended family or caretaker: governed strictly by Owner-assigned `custom_permissions`.
+    Other,
+}
+
+/// Unified domain action key evaluated against the central [`action_policy`] matrix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DomainAction {
+    /// Any of the 8 granular ledger/view [`Permission`] flags.
+    Permission(Permission),
+    /// Family membership governance: inviting members, changing roles, and removing members.
+    ManageFamily,
+}
+
+/// Outcome of looking up a `(DomainAction, Role)` pair in [`action_policy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccessRule {
+    /// Action is unconditionally permitted for this role.
+    Allow,
+    /// Action is unconditionally forbidden for this role, regardless of `custom_permissions`.
+    Deny,
+    /// Action is permitted only if `custom_permissions` contains the target `Permission`.
+    Custom,
+}
+
 impl Permission {
-    /// Returns all 8 defined permission flags.
+    /// Returns all 8 defined ledger/view permission flags.
     pub const fn all() -> [Self; 8] {
         [
             Self::RecordOwnTransactions,
@@ -52,84 +98,87 @@ impl Permission {
     }
 }
 
-/// Family member role controlling permissions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    Owner,
-    Member,
-    Child,
-    Other,
-}
-
 impl Role {
-    /// Returns the fixed permission set for predefined roles, or an empty slice
-    /// for `Role::Other` (which uses per-member custom permissions).
+    /// Returns the fixed [`Permission`] set for predefined roles (`Owner`, `Member`, `Child`),
+    /// or an empty `Vec` for `Role::Other` (which relies on per-member `custom_permissions`).
     pub fn default_permissions(&self) -> Vec<Permission> {
-        match self {
-            Role::Owner | Role::Member => Permission::all().to_vec(),
-            Role::Child => vec![
-                Permission::RecordOwnTransactions,
-                Permission::ManageOwnAccounts,
-            ],
-            Role::Other => Vec::new(),
-        }
+        Permission::all()
+            .into_iter()
+            .filter(|&perm| self.has_permission(&[], perm))
+            .collect()
     }
 
-    /// Evaluates whether a member with this role and `custom_permissions` holds `perm`.
+    /// Evaluates whether this role and `custom_permissions` grant `perm`.
     ///
-    /// For `Owner`, `Member`, and `Child`, `custom_permissions` is ignored and
-    /// fixed role rules apply. For `Other`, `custom_permissions` is checked.
+    /// For `Owner`, `Member`, and `Child`, `custom_permissions` is ignored and the fixed
+    /// matrix rules apply. For `Other`, `custom_permissions` must contain `perm`.
     pub fn has_permission(&self, custom_permissions: &[Permission], perm: Permission) -> bool {
-        match self {
-            Role::Owner | Role::Member => true,
-            Role::Child => matches!(
-                perm,
-                Permission::RecordOwnTransactions | Permission::ManageOwnAccounts
-            ),
-            Role::Other => custom_permissions.contains(&perm),
+        self.can_perform(custom_permissions, DomainAction::Permission(perm))
+    }
+
+    /// Evaluates any [`DomainAction`] in O(1) against the exhaustive [`action_policy`] matrix.
+    pub fn can_perform(&self, custom_permissions: &[Permission], action: DomainAction) -> bool {
+        match (action_policy(action, *self), action) {
+            (AccessRule::Allow, _) => true,
+            (AccessRule::Deny, _) => false,
+            (AccessRule::Custom, DomainAction::Permission(perm)) => {
+                custom_permissions.contains(&perm)
+            }
+            // Non-permission governance actions (ManageFamily) cannot be delegated via custom flags.
+            (AccessRule::Custom, DomainAction::ManageFamily) => false,
         }
     }
 
-    /// Returns `true` if this role is allowed to view and manage loans/debt plans.
+    /// Asserts that this role and `custom_permissions` may perform `action`, returning
+    /// [`DomainError::InsufficientRole`] if denied.
+    pub fn assert_can_perform(
+        &self,
+        custom_permissions: &[Permission],
+        action: DomainAction,
+    ) -> Result<(), DomainError> {
+        if self.can_perform(custom_permissions, action) {
+            return Ok(());
+        }
+        Err(DomainError::InsufficientRole { role: *self })
+    }
+
+    /// Returns `true` if this role and `custom_permissions` grant access to debt/loan features.
     ///
-    /// RULE (bounded-contexts.md / AGENTS.md): Children must be blocked from
-    /// loans, debt plans, and family-level reports.
-    pub fn can_access_debt_features(&self) -> bool {
-        matches!(self, Role::Owner | Role::Member | Role::Other)
+    /// For `Role::Other`, requires [`Permission::ViewLoans`] in `custom_permissions`.
+    pub fn can_access_debt_features(&self, custom_permissions: &[Permission]) -> bool {
+        self.can_perform(custom_permissions, DomainAction::Permission(Permission::ViewLoans))
     }
 
-    /// Returns `true` if this role can manage family membership (invite, remove, change roles).
+    /// Asserts access to debt/loan features, checking [`Permission::ViewLoans`] for `Role::Other`.
+    pub fn assert_debt_access(&self, custom_permissions: &[Permission]) -> Result<(), DomainError> {
+        self.assert_can_perform(custom_permissions, DomainAction::Permission(Permission::ViewLoans))
+    }
+
+    /// Returns `true` if this role can manage family membership (`Role::Owner` only).
     pub fn can_manage_family(&self) -> bool {
-        matches!(self, Role::Owner)
+        self.can_perform(&[], DomainAction::ManageFamily)
     }
 
-    /// Returns `true` if this role can view family-level financial reports.
-    pub fn can_view_family_reports(&self) -> bool {
-        matches!(self, Role::Owner | Role::Member | Role::Other)
-    }
-
-    /// Returns `true` if this role can register and modify payment accounts.
-    pub fn can_manage_accounts(&self) -> bool {
-        matches!(self, Role::Owner | Role::Member | Role::Other)
-    }
-
-    /// Asserts that this role has access to debt features, returning an error otherwise.
-    pub fn assert_debt_access(&self) -> Result<(), DomainError> {
-        if self.can_access_debt_features() {
-            Ok(())
-        } else {
-            Err(DomainError::InsufficientRole { role: *self })
-        }
-    }
-
-    /// Asserts that this role can manage the family, returning an error otherwise.
+    /// Asserts that this role can manage family membership (`Role::Owner` only).
     pub fn assert_family_management(&self) -> Result<(), DomainError> {
-        if self.can_manage_family() {
-            Ok(())
-        } else {
-            Err(DomainError::InsufficientRole { role: *self })
-        }
+        self.assert_can_perform(&[], DomainAction::ManageFamily)
+    }
+
+    /// Returns `true` if this role and `custom_permissions` allow viewing family reports.
+    ///
+    /// For `Role::Other`, requires [`Permission::ViewReports`] in `custom_permissions`.
+    pub fn can_view_family_reports(&self, custom_permissions: &[Permission]) -> bool {
+        self.can_perform(custom_permissions, DomainAction::Permission(Permission::ViewReports))
+    }
+
+    /// Returns `true` if this role and `custom_permissions` allow managing own payment accounts.
+    ///
+    /// For `Role::Other`, requires [`Permission::ManageOwnAccounts`] in `custom_permissions`.
+    pub fn can_manage_accounts(&self, custom_permissions: &[Permission]) -> bool {
+        self.can_perform(
+            custom_permissions,
+            DomainAction::Permission(Permission::ManageOwnAccounts),
+        )
     }
 }
 
@@ -168,6 +217,36 @@ impl TryFrom<String> for Role {
     }
 }
 
+/// Central compile-time authorization table mapping every `(DomainAction, Role)` pair.
+///
+/// Exhaustive `match` ensures adding a new `Permission`, `DomainAction`, or `Role` variant
+/// triggers a compiler error until its policy row/column is explicitly specified here.
+const fn action_policy(action: DomainAction, role: Role) -> AccessRule {
+    use AccessRule::{Allow, Custom, Deny};
+    use DomainAction::{ManageFamily, Permission as P};
+    use Permission::*;
+
+    //                               Owner  Member Child  Other
+    let (owner, member, child, other) = match action {
+        P(RecordOwnTransactions) => (Allow, Allow, Allow, Custom),
+        P(ManageOwnAccounts)     => (Allow, Allow, Allow, Custom),
+        P(RecordAnyTransaction)  => (Allow, Allow, Deny,  Custom),
+        P(ViewAllTransactions)   => (Allow, Allow, Deny,  Custom),
+        P(ViewAllAccounts)       => (Allow, Allow, Deny,  Custom),
+        P(ViewLoans)             => (Allow, Allow, Deny,  Custom),
+        P(ViewBudget)            => (Allow, Allow, Deny,  Custom),
+        P(ViewReports)           => (Allow, Allow, Deny,  Custom),
+        ManageFamily             => (Allow, Deny,  Deny,  Deny),
+    };
+
+    match role {
+        Role::Owner  => owner,
+        Role::Member => member,
+        Role::Child  => child,
+        Role::Other  => other,
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
@@ -175,23 +254,54 @@ mod tests {
 
     #[test]
     fn child_cannot_access_debt_features() {
-        assert!(!Role::Child.can_access_debt_features());
-        assert!(Role::Child.assert_debt_access().is_err());
+        assert!(!Role::Child.can_access_debt_features(&[Permission::ViewLoans]));
+        assert!(matches!(
+            Role::Child.assert_debt_access(&[Permission::ViewLoans]),
+            Err(DomainError::InsufficientRole { role: Role::Child })
+        ));
     }
 
     #[test]
-    fn owner_member_other_can_access_debt() {
-        assert!(Role::Owner.can_access_debt_features());
-        assert!(Role::Member.can_access_debt_features());
-        assert!(Role::Other.can_access_debt_features());
+    fn debt_access_enforces_view_loans_for_other_role() {
+        assert!(Role::Owner.can_access_debt_features(&[]));
+        assert!(Role::Member.can_access_debt_features(&[]));
+        assert!(Role::Other.can_access_debt_features(&[Permission::ViewLoans]));
+        assert!(Role::Other.assert_debt_access(&[Permission::ViewLoans]).is_ok());
+
+        assert!(!Role::Other.can_access_debt_features(&[Permission::ViewBudget]));
+        assert!(matches!(
+            Role::Other.assert_debt_access(&[]),
+            Err(DomainError::InsufficientRole { role: Role::Other })
+        ));
     }
 
     #[test]
     fn only_owner_manages_family() {
         assert!(Role::Owner.can_manage_family());
+        assert!(Role::Owner.assert_family_management().is_ok());
         assert!(!Role::Member.can_manage_family());
         assert!(!Role::Child.can_manage_family());
         assert!(!Role::Other.can_manage_family());
+    }
+
+    #[test]
+    fn reports_and_accounts_follow_policy_table() {
+        assert!(Role::Member.can_view_family_reports(&[]));
+        assert!(!Role::Child.can_view_family_reports(&[]));
+        assert!(!Role::Other.can_view_family_reports(&[]));
+        assert!(Role::Other.can_view_family_reports(&[Permission::ViewReports]));
+
+        assert!(Role::Child.can_manage_accounts(&[]));
+        assert!(!Role::Other.can_manage_accounts(&[]));
+        assert!(Role::Other.can_manage_accounts(&[Permission::ManageOwnAccounts]));
+    }
+
+    #[test]
+    fn manage_family_ignores_all_custom_permissions() {
+        let all = Permission::all();
+        assert!(!Role::Member.can_perform(&all, DomainAction::ManageFamily));
+        assert!(!Role::Child.can_perform(&all, DomainAction::ManageFamily));
+        assert!(!Role::Other.can_perform(&all, DomainAction::ManageFamily));
     }
 
     #[test]
