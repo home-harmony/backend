@@ -1,0 +1,38 @@
+# Local secrets & environment overrides (keep .env.example readable)
+.env
+.env.*
+!.env.example
+.aws-resources.md
+samconfig.local.toml
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Rust / cargo-lambda / AWS SAM build & coverage artifacts
+target/
+.aws-sam/
+*.profraw
+*.profdata
+lcov.info
+tarpaulin-report.*
+
+# Bulky machine-generated files (tracked in Git, noisy for AI context)
+Cargo.lock
+.sqlx/
+
+# Local AI scratch & logs (keep .ai/rules/, .ai/skills/, .agents/, specs/ visible)
+.ai/local/
+*.log
+
+# VCS, IDE & OS metadata
+.git/
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
