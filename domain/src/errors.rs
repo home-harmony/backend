@@ -4,8 +4,9 @@ use rust_decimal::Decimal;
 use thiserror::Error;
 
 use crate::value_objects::{
-    CurrencyCode, MemberId, Role, UserId, display_name::DisplayNameError, email::EmailError,
-    family_name::FamilyNameError, invite_ttl::InviteTtlError, relationship::RelationshipError,
+    CurrencyCode, MemberId, Role, UserId, currency_code::CurrencyCodeError,
+    display_name::DisplayNameError, email::EmailError, family_name::FamilyNameError,
+    invite_ttl::InviteTtlError, relationship::RelationshipError,
 };
 
 /// Errors that can occur within the domain layer.
@@ -22,8 +23,11 @@ pub enum DomainError {
     #[error("Amount cannot be negative: {amount}")]
     NegativeAmount { amount: Decimal },
 
-    #[error("Invalid currency code '{code}': must be exactly 3 uppercase ASCII letters")]
-    InvalidCurrencyCode { code: String },
+    #[error("Arithmetic overflow during {operation}")]
+    ArithmeticOverflow { operation: &'static str },
+
+    #[error("Invalid currency code: {reason}")]
+    InvalidCurrencyCode { reason: String },
 
     // ── Family ───────────────────────────────────────────────────────────────────
     #[error("Invalid family name: {reason}")]
@@ -41,8 +45,14 @@ pub enum DomainError {
     #[error("Invalid invite TTL: {reason}")]
     InvalidInviteTtl { reason: String },
 
+    #[error("Family has been deleted")]
+    FamilyDeleted,
+
     #[error("Family already has an owner and cannot have a second one")]
     DuplicateOwner,
+
+    #[error("User is already an active member of this family: {user_id}")]
+    MemberAlreadyExists { user_id: UserId },
 
     #[error("Member not found in family: {member_id}")]
     MemberNotFound { member_id: MemberId },
@@ -54,6 +64,9 @@ pub enum DomainError {
     CannotRemoveOwner,
 
     // ── Invite tokens ────────────────────────────────────────────────────────────
+    #[error("Invite token not found")]
+    InviteTokenNotFound,
+
     #[error("Invite token has expired")]
     TokenExpired,
 
@@ -77,6 +90,14 @@ pub enum DomainError {
     // ── Generic ──────────────────────────────────────────────────────────────────
     #[error("Invariant violation: {message}")]
     InvariantViolation { message: String },
+}
+
+impl From<CurrencyCodeError> for DomainError {
+    fn from(err: CurrencyCodeError) -> Self {
+        Self::InvalidCurrencyCode {
+            reason: err.to_string(),
+        }
+    }
 }
 
 impl From<FamilyNameError> for DomainError {

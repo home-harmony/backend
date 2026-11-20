@@ -18,15 +18,15 @@
 
 ## 2. Type Safety & Value Objects
 
-- **Mandatory `nutype` / Typed IDs**: Every domain identifier (`FamilyId`, `MemberId`, `TransactionId`) and constrained value object (`FamilyName`, `DisplayName`, `Email`, `CurrencyCode`) must use `nutype` or strongly-typed UUID newtypes. Never pass raw `String`, `Uuid`, or `i64` in domain signatures.
-- **Exact Money**: Monetary values must always use `rust_decimal::Decimal` (`Money` VO). **`f32` and `f64` are strictly banned.**
-- **Deterministic Collections**: Use `indexmap::{IndexMap, IndexSet}` when field or insertion order must be preserved.
+- **Mandatory `nutype` / Typed IDs**: Every domain identifier (`FamilyId`, `MemberId`, `TransactionId`) and constrained value object (`CurrencyCode`, `FamilyName`, `DisplayName`, `Email`, `Relationship`, `InviteTtl`) must use `nutype` or strongly-typed UUID newtypes (`try_new`). Never pass raw `String`, `Uuid`, or `i64` in domain signatures.
+- **Exact Money**: Monetary values must always use `rust_decimal::Decimal` (`Money` VO for strictly `>= 0` amounts; `SignedMoney` for signed account balances/surplus). **`f32` and `f64` are strictly banned.**
+- **Deterministic Collections**: Add `indexmap::{IndexMap, IndexSet}` when insertion-order maps/sets are needed, or use `BTreeMap`/`BTreeSet` when deterministic sorted order is required.
 
 ---
 
 ## 3. Strict Prohibitions & Anti-Patterns
 
-- **Zero `.unwrap()` or `.expect()` in Production Code**: Propagate errors using `?` and `thiserror`. (`.expect("reason")` is allowed only in test setup per `clippy.toml`).
+- **Zero `.unwrap()` or `.expect()` in Production Code**: `Cargo.toml` enforces `unwrap_used = "deny"` and `expect_used = "deny"`; propagate errors using `?` and `thiserror`. Both `.unwrap()` and `.expect("reason")` are allowed inside `#[test]` / `#[cfg(test)]` per `clippy.toml` (helpers outside `#[test]` in `tests/*.rs` should return `Result`).
 - **No `Deref` Polymorphism**: Never implement `Deref` to simulate inheritance.
 - **No Unjustified `.clone()`**: Do not call `.clone()` merely to silence the borrow checker; prefer borrowed slices (`&str`, `&[T]`) or moving owned values.
 - **No `#![deny(warnings)]` in Crates**: Enforce zero warnings via `cargo clippy --workspace --all-targets -- -D warnings`.

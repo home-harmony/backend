@@ -1,13 +1,16 @@
 //! `Email` — validated and normalized email address value object.
 //!
-//! Backed by [`nutype`]: sanitization and validation run at construction and
-//! deserialization time so it is impossible to hold a blank or malformed `Email`.
+//! Backed by [`nutype`] and [`email_address`]: sanitization and validation run at
+//! construction and deserialization time so it is impossible to hold a blank or
+//! malformed `Email`.
 //!
 //! # Invariants
-//! - Leading/trailing whitespace is trimmed and ASCII/Unicode characters are lowercased.
-//! - Must not be empty and must be at most 254 characters (RFC 5321).
-//! - Must contain exactly one `@`, a valid local part (`1..=64` chars, no leading/trailing/consecutive dots),
-//!   and a valid multi-label domain with a valid TLD.
+//! - Leading/trailing whitespace is trimmed and characters are lowercased.
+//! - Must not be empty and must be at most 254 UTF-8 bytes (RFC 5321).
+//! - Must parse cleanly via `email_address` with a required TLD (`>= 2` domain labels),
+//!   without display names (`Name <...>`), domain literals (`[...]`), or quoted local parts.
+//! - Domain labels must be valid DNS/IDN labels (`1..=63` chars, no leading/trailing hyphens)
+//!   ending in a valid TLD (`>= 2` ASCII letters or punycode `xn--...`).
 //!
 //! # Examples
 //! ```
@@ -20,11 +23,12 @@
 //! assert!(Email::try_new("not-an-email").is_err());
 //! ```
 
+use email_address::{EmailAddress, Options};
 use nutype::nutype;
 
 #[nutype(
     sanitize(trim, lowercase),
-    validate(not_empty, len_char_max = 254, predicate = is_valid_email),
+    validate(not_empty, predicate = is_valid_email),
     derive(
         Debug,
         Clone,
@@ -40,25 +44,28 @@ use nutype::nutype;
 )]
 pub struct Email(String);
 
-fn is_valid_email(value: &str) -> bool {
-    if value.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return false;
+impl Email {
+    /// Returns the inner string slice.
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
     }
-    let Some((local, domain)) = value.split_once('@') else {
-        return false;
-    };
-    if domain.contains('@') {
-        return false;
-    }
-    is_valid_local_part(local) && is_valid_domain(domain)
 }
 
-fn is_valid_local_part(local: &str) -> bool {
-    !local.is_empty()
-        && local.len() <= 64
-        && !local.starts_with('.')
-        && !local.ends_with('.')
-        && !local.contains("..")
+fn is_valid_email(value: &str) -> bool {
+    if value.len() > 254 || value.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return false;
+    }
+    let options = Options::default()
+        .with_required_tld()
+        .without_domain_literal()
+        .without_display_text();
+    let Ok(parsed) = EmailAddress::parse_with_options(value, options) else {
+        return false;
+    };
+    if parsed.local_part().starts_with('"') {
+        return false;
+    }
+    is_valid_domain(parsed.domain())
 }
 
 fn is_valid_domain(domain: &str) -> bool {
@@ -80,9 +87,9 @@ fn is_valid_domain_label(label: &str) -> bool {
         && label.len() <= 63
         && !label.starts_with('-')
         && !label.ends_with('-')
-        && label
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && label.chars().all(|c| {
+            c.is_ascii_alphanumeric() || c == '-' || (!c.is_ascii() && c.is_alphanumeric())
+        })
 }
 
 fn is_valid_tld(tld: &str) -> bool {
@@ -101,12 +108,14 @@ mod tests {
         assert!(Email::try_new("alice@example.com").is_ok());
         assert!(Email::try_new("alice+tag@sub.example.co.uk").is_ok());
         assert!(Email::try_new("first.last@my-domain.xn--p1ai").is_ok());
+        assert!(Email::try_new("пользователь@example.com").is_ok());
+        assert!(Email::try_new("Dörte@Sörensen.example.com").is_ok());
     }
 
     #[test]
     fn email_is_trimmed_and_lowercased() {
         let email = Email::try_new("  Alice.Smith@Example.COM  ").unwrap();
-        assert_eq!(email.as_ref(), "alice.smith@example.com");
+        assert_eq!(email.as_str(), "alice.smith@example.com");
         assert_eq!(email.to_string(), "alice.smith@example.com");
     }
 
@@ -130,6 +139,9 @@ mod tests {
         assert!(Email::try_new("alice.@example.com").is_err());
         assert!(Email::try_new("al..ice@example.com").is_err());
         assert!(Email::try_new("al ice@example.com").is_err());
+        assert!(Email::try_new("<script>@example.com").is_err());
+        assert!(Email::try_new("\"quoted\"@example.com").is_err());
+        assert!(Email::try_new("Alice <alice@example.com>").is_err());
         let local_65 = format!("{}@example.com", "a".repeat(65));
         assert!(Email::try_new(local_65).is_err());
     }
@@ -137,16 +149,19 @@ mod tests {
     #[test]
     fn invalid_domain_is_rejected() {
         assert!(Email::try_new("alice@localhost").is_err());
+        assert!(Email::try_new("alice@[127.0.0.1]").is_err());
         assert!(Email::try_new("alice@-example.com").is_err());
         assert!(Email::try_new("alice@example-.com").is_err());
         assert!(Email::try_new("alice@example..com").is_err());
+        assert!(Email::try_new("alice@ex_ample.com").is_err());
+        assert!(Email::try_new("alice@ex!ample.com").is_err());
         assert!(Email::try_new("alice@example.c").is_err());
         assert!(Email::try_new("alice@example.123").is_err());
         assert!(Email::try_new("alice@example.xn--").is_err());
     }
 
     #[test]
-    fn over_254_chars_is_rejected() {
+    fn over_254_bytes_is_rejected() {
         let domain = format!(
             "{}.{}.{}.com",
             "a".repeat(61),
@@ -162,12 +177,17 @@ mod tests {
         let over_limit = format!("{}@{}", "u".repeat(64), domain);
         assert_eq!(over_limit.len(), 255);
         assert!(Email::try_new(over_limit).is_err());
+
+        let multibyte_over_limit = format!("{}@example.com", "é".repeat(122));
+        assert!(multibyte_over_limit.chars().count() < 254);
+        assert!(multibyte_over_limit.len() > 254);
+        assert!(Email::try_new(multibyte_over_limit).is_err());
     }
 
     #[test]
     fn serde_normalizes_and_validates() {
         let email: Email = serde_json::from_str("\"  Alice@Example.COM \"").unwrap();
-        assert_eq!(email.as_ref(), "alice@example.com");
+        assert_eq!(email.as_str(), "alice@example.com");
         assert_eq!(
             serde_json::to_string(&email).unwrap(),
             "\"alice@example.com\""

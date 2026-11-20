@@ -40,6 +40,13 @@ use nutype::nutype;
 )]
 pub struct Relationship(String);
 
+impl Relationship {
+    /// Returns the inner string slice.
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {

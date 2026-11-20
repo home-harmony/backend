@@ -17,23 +17,36 @@
 | `Permission` | `domain::value_objects::Permission` | The 8 **ledger/view capability flags** (`RecordOwnTransactions`, `RecordAnyTransaction`, `ViewAllTransactions`, `ViewAllAccounts`, `ManageOwnAccounts`, `ViewLoans`, `ViewBudget`, `ViewReports`). Does **not** include family membership administration. |
 | `DomainAction` | `domain::value_objects::DomainAction` | Unified policy table key: `Permission(Permission)` or `ManageFamily` evaluated via exhaustive `action_policy` matrix |
 | `FamilyManagement` | `Role::can_manage_family()` / `Role::assert_family_management()` | Exclusive **Owner-only** governance over `Family` membership (inviting members, changing roles, removing members). |
-| `InsufficientRole` | `domain::errors::DomainError::InsufficientRole` | Returned when role or custom permissions disallow the requested action |
+| `DomainError` | `domain::errors::DomainError` | Typed domain errors (`InsufficientRole`, `FamilyDeleted`, `DuplicateOwner`, `CannotRemoveOwner`, `MemberAlreadyExists`, `MemberNotFound`, `UserNotInFamily`, `InviteTokenNotFound`, `TokenExpired`, `TokenAlreadyUsed`, `InvariantViolation`) |
 
 ---
 
 ## Rules
 
-| ID | Status | Origin | Given Role & Custom Permissions | Action / Input | Expected Result |
+| ID | Status | Origin | Given State / Role & Custom Permissions | Action / Input | Expected Result / Next State |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `FM-01` | `Draft` | `doc:documentation/domain/ubiquitous-language.md` | `Role::Owner`, `custom = []` | `has_permission(&custom, any Permission)` (any of the 8 ledger/view flags) | `true` (all 8 ledger/view flags allowed) |
-| `FM-02` | `Draft` | `doc:documentation/domain/ubiquitous-language.md` | `Role::Member`, `custom = []` | `has_permission(&custom, any Permission)` (any of the 8 ledger/view flags) | `true` (`Member` has all 8 ledger/view flags, **not** `ManageFamily`) |
-| `FM-03` | `Draft` | `observed` | `Role::Child`, `custom = [ViewLoans]` | `has_permission(&custom, Permission::ViewLoans)` | `false` (`custom` ignored for fixed roles) |
-| `FM-04` | `Draft` | `observed` | `Role::Child`, `custom = []` | `has_permission(&custom, Permission::RecordOwnTransactions)` | `true` (only `RecordOwnTransactions` and `ManageOwnAccounts` allowed) |
-| `FM-05` | `Draft` | `doc:documentation/domain/ubiquitous-language.md` | `Role::Other`, `custom = [ViewLoans]` | `has_permission(&custom, Permission::ViewLoans)` | `true`; `false` for permissions absent from `custom` |
+| `FM-01` | `Draft` | `doc:documentation/domain/bounded-contexts.md` | `Role::Owner`, `custom = []` | `has_permission(&custom, any Permission)` | `true` for each of the 8 ledger/view flags |
+| `FM-02` | `Draft` | `doc:documentation/domain/bounded-contexts.md` | `Role::Member`, `custom = []` | `has_permission(&custom, any Permission)` | `true` for each of the 8 ledger/view flags (`ManageFamily` stays denied) |
+| `FM-03` | `Draft` | `doc:documentation/domain/bounded-contexts.md` | `Role::Child`, `custom = [ViewLoans]` | `has_permission(&custom, Permission::ViewLoans)` | `false` (`custom` ignored for fixed roles) |
+| `FM-04` | `Draft` | `doc:documentation/domain/bounded-contexts.md` | `Role::Child`, `custom = []` | `has_permission(&custom, Permission::RecordOwnTransactions)` | `true` |
+| `FM-05` | `Draft` | `doc:documentation/domain/bounded-contexts.md` | `Role::Other`, `custom = [ViewLoans]` | `has_permission(&custom, Permission::ViewLoans)` | `true` |
 | `FM-06` | `Draft` | `doc:documentation/domain/bounded-contexts.md` | `Role::Child`, `custom = [ViewLoans]` | `assert_debt_access(&custom)` | `Err(DomainError::InsufficientRole { role: Role::Child })` |
-| `FM-07` | `Draft` | `human` | `Role::Owner` / `Role::Member`, or `Role::Other` with `custom = [ViewLoans]` | `assert_debt_access(&custom)` | `Ok(())` |
-| `FM-08` | `Draft` | `human` | `Role::Owner` vs `Role::Member` / `Role::Other` / `Role::Child` | `assert_family_management()` | `Ok(())` strictly for `Role::Owner`; `Err(DomainError::InsufficientRole)` for `Member`, `Other`, and `Child` |
-| `FM-09` | `Draft` | `human` | `Role::Other`, `custom = []` (or missing `Permission::ViewLoans`) | `assert_debt_access(&custom)` | `Err(DomainError::InsufficientRole { role: Role::Other })` |
+| `FM-07` | `Draft` | `human` | `Role::Other`, `custom = [ViewLoans]` | `assert_debt_access(&custom)` | `Ok(())` |
+| `FM-08` | `Draft` | `human` | `Role::Owner`, `custom = []` | `assert_family_management()` | `Ok(())` |
+| `FM-09` | `Draft` | `human` | `Role::Other`, `custom = []` (missing `ViewLoans`) | `assert_debt_access(&custom)` | `Err(DomainError::InsufficientRole { role: Role::Other })` |
+| `FM-10` | `Draft` | `doc:documentation/domain/bounded-contexts.md` | `Role::Other`, `custom = [ViewLoans]` | `has_permission(&custom, Permission::ViewBudget)` | `false` (absent flag denied) |
+| `FM-11` | `Draft` | `human` | `Role::Owner`, `custom = []` | `assert_debt_access(&custom)` | `Ok(())` |
+| `FM-12` | `Draft` | `human` | `Role::Member`, `custom = []` | `assert_debt_access(&custom)` | `Ok(())` |
+| `FM-13` | `Draft` | `human` | `Role::Member`, `Role::Child`, or `Role::Other` (even with all 8 flags) | `assert_family_management()` | `Err(DomainError::InsufficientRole { role })` |
+| `FM-14` | `Draft` | `doc:documentation/domain/bounded-contexts.md` | `Role::Child`, `custom = []` | `has_permission(&custom, Permission::ManageOwnAccounts)` | `true` |
+| `FM-15` | `Draft` | `human` | Active `Family` with unused unexpired invite token and `user_id` already active | `accept_invite_at(token, user_id, name, now)` | `Err(DomainError::MemberAlreadyExists { user_id })`; token remains `is_used() == false` |
+| `FM-16` | `Draft` | `human` | Active `Family` with soft-deleted `FamilyMember` for `user_id` and valid invite | `accept_invite_at(token, user_id, new_name, now)` | Reactivates existing member preserving `id()`, clears `deleted_at`, updates role/permissions/relationship, emits `MemberJoined` |
+| `FM-17` | `Draft` | `human` | Soft-deleted `Family` (`is_deleted() == true`) | `create_invite_at` / `accept_invite_at` / `change_member_role_at` / `remove_member_at` | `Err(DomainError::FamilyDeleted)` |
+| `FM-18` | `Draft` | `human` | Unused invite token where `now >= invite.expires_at()` | `accept_invite_at(token, user_id, name, now)` | `Err(DomainError::TokenExpired)` |
+| `FM-19` | `Draft` | `human` | Token ID absent from `family.invite_tokens()` | `accept_invite_at(token, user_id, name, now)` | `Err(DomainError::InviteTokenNotFound)` |
+| `FM-20` | `Draft` | `human` | Owner targets active member with `Role::Other` and `[ViewBudget, ViewBudget]` | `change_member_role_at(..., Role::Other, perms, now)` | Deduplicates permissions to `[ViewBudget]`, updates role/permissions, emits `MemberRoleChanged` carrying updated `permissions` |
+| `FM-21` | `Draft` | `human` | Owner targets active member with identical `(role, permissions)` | `change_member_role_at(..., same_role, same_perms, now)` | `Ok(vec![])` (no-op emits zero events) |
+| `FM-22` | `Draft` | `observed` | Owner attempts to demote self or promote another member to `Role::Owner` | `change_member_role_at(...)` / `remove_member_at(...)` | `Err(DomainError::CannotRemoveOwner)` on Owner demote/remove; `Err(DomainError::DuplicateOwner)` on promotion |
 
 ---
 
@@ -48,3 +61,4 @@
 | # | Location | Code Says | Doc / Spec Says | Impact |
 | :--- | :--- | :--- | :--- | :--- |
 | 1 | `backend/domain/src/value_objects/role.rs` | Unified all checks in exhaustive 4-column `const fn action_policy` matrix; `assert_debt_access(&custom)` checks `Permission::ViewLoans` for `Role::Other` | `FM-07` / `FM-09` (`Origin: human`, Option B): `Role::Other` requires explicit `Permission` flags on debt, report, and account checks | Resolved on 2026-11-20 |
+| 2 | `backend/domain/src/entities/family.rs` | Added `FamilyDeleted`, `MemberAlreadyExists`, `InviteTokenNotFound`, soft-deleted reactivation (`2.1-A`), `change_member_role` permissions + no-op (`2.2-A`), and `*_at` deterministic clock methods (`2.3A-1`) | Aligned in `FM-15`–`FM-22` (`Status: Draft`) | Pending human spec approval |

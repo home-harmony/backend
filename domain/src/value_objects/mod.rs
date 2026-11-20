@@ -19,7 +19,7 @@ pub use display_name::DisplayName;
 pub use email::Email;
 pub use family_name::FamilyName;
 pub use ids::*;
-pub use invite_ttl::InviteTtl;
+pub use invite_ttl::{InviteTtl, MAX_INVITE_TTL_SECONDS};
 pub use money::Money;
 pub use relationship::Relationship;
 pub use role::{DomainAction, Permission, Role};

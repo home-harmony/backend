@@ -14,13 +14,13 @@ use crate::errors::DomainError;
 /// ```
 /// use domain::value_objects::CurrencyCode;
 ///
-/// let usd = CurrencyCode::new("USD").unwrap();
-/// let eur = CurrencyCode::new("EUR").unwrap();
+/// let usd = CurrencyCode::try_new("USD").unwrap();
+/// let eur = CurrencyCode::try_new("EUR").unwrap();
 /// assert_ne!(usd, eur);
 ///
 /// // Invalid codes are rejected
-/// assert!(CurrencyCode::new("us").is_err());   // lowercase
-/// assert!(CurrencyCode::new("USDD").is_err()); // too long
+/// assert!(CurrencyCode::try_new("us").is_err());   // lowercase
+/// assert!(CurrencyCode::try_new("USDD").is_err()); // too long
 /// ```
 #[nutype(
     sanitize(trim),
@@ -41,13 +41,6 @@ use crate::errors::DomainError;
 pub struct CurrencyCode(String);
 
 impl CurrencyCode {
-    /// Creates a new `CurrencyCode`, validating the format.
-    pub fn new(code: &str) -> Result<Self, DomainError> {
-        Self::try_new(code).map_err(|_| DomainError::InvalidCurrencyCode {
-            code: code.trim().to_owned(),
-        })
-    }
-
     /// Returns the inner string slice.
     pub fn as_str(&self) -> &str {
         self.as_ref()
@@ -58,7 +51,7 @@ impl TryFrom<String> for CurrencyCode {
     type Error = DomainError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::new(&value)
+        Self::try_new(value).map_err(DomainError::from)
     }
 }
 
@@ -66,7 +59,7 @@ impl TryFrom<&str> for CurrencyCode {
     type Error = DomainError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::new(value)
+        Self::try_new(value).map_err(DomainError::from)
     }
 }
 
@@ -81,35 +74,35 @@ mod tests {
 
     #[test]
     fn valid_codes_are_accepted() {
-        assert!(CurrencyCode::new("USD").is_ok());
-        assert!(CurrencyCode::new("EUR").is_ok());
-        assert!(CurrencyCode::new("MDL").is_ok());
-        assert!(CurrencyCode::new("GBP").is_ok());
+        assert!(CurrencyCode::try_new("USD").is_ok());
+        assert!(CurrencyCode::try_new("EUR").is_ok());
+        assert!(CurrencyCode::try_new("MDL").is_ok());
+        assert!(CurrencyCode::try_new("GBP").is_ok());
     }
 
     #[test]
     fn lowercase_is_rejected() {
-        assert!(CurrencyCode::new("usd").is_err());
-        assert!(CurrencyCode::new("Usd").is_err());
+        assert!(CurrencyCode::try_new("usd").is_err());
+        assert!(CurrencyCode::try_new("Usd").is_err());
     }
 
     #[test]
     fn wrong_length_is_rejected() {
-        assert!(CurrencyCode::new("US").is_err());
-        assert!(CurrencyCode::new("USDD").is_err());
-        assert!(CurrencyCode::new("").is_err());
+        assert!(CurrencyCode::try_new("US").is_err());
+        assert!(CurrencyCode::try_new("USDD").is_err());
+        assert!(CurrencyCode::try_new("").is_err());
     }
 
     #[test]
     fn display_returns_uppercase_code() {
-        let code = CurrencyCode::new("MDL").unwrap();
+        let code = CurrencyCode::try_new("MDL").unwrap();
         assert_eq!(code.to_string(), "MDL");
     }
 
     #[test]
     fn equality_is_value_based() {
-        let a = CurrencyCode::new("USD").unwrap();
-        let b = CurrencyCode::new("USD").unwrap();
+        let a = CurrencyCode::try_new("USD").unwrap();
+        let b = CurrencyCode::try_new("USD").unwrap();
         assert_eq!(a, b);
     }
 

@@ -146,12 +146,18 @@ impl Role {
     ///
     /// For `Role::Other`, requires [`Permission::ViewLoans`] in `custom_permissions`.
     pub fn can_access_debt_features(&self, custom_permissions: &[Permission]) -> bool {
-        self.can_perform(custom_permissions, DomainAction::Permission(Permission::ViewLoans))
+        self.can_perform(
+            custom_permissions,
+            DomainAction::Permission(Permission::ViewLoans),
+        )
     }
 
     /// Asserts access to debt/loan features, checking [`Permission::ViewLoans`] for `Role::Other`.
     pub fn assert_debt_access(&self, custom_permissions: &[Permission]) -> Result<(), DomainError> {
-        self.assert_can_perform(custom_permissions, DomainAction::Permission(Permission::ViewLoans))
+        self.assert_can_perform(
+            custom_permissions,
+            DomainAction::Permission(Permission::ViewLoans),
+        )
     }
 
     /// Returns `true` if this role can manage family membership (`Role::Owner` only).
@@ -168,7 +174,10 @@ impl Role {
     ///
     /// For `Role::Other`, requires [`Permission::ViewReports`] in `custom_permissions`.
     pub fn can_view_family_reports(&self, custom_permissions: &[Permission]) -> bool {
-        self.can_perform(custom_permissions, DomainAction::Permission(Permission::ViewReports))
+        self.can_perform(
+            custom_permissions,
+            DomainAction::Permission(Permission::ViewReports),
+        )
     }
 
     /// Returns `true` if this role and `custom_permissions` allow managing own payment accounts.
@@ -229,21 +238,21 @@ const fn action_policy(action: DomainAction, role: Role) -> AccessRule {
     //                               Owner  Member Child  Other
     let (owner, member, child, other) = match action {
         P(RecordOwnTransactions) => (Allow, Allow, Allow, Custom),
-        P(ManageOwnAccounts)     => (Allow, Allow, Allow, Custom),
-        P(RecordAnyTransaction)  => (Allow, Allow, Deny,  Custom),
-        P(ViewAllTransactions)   => (Allow, Allow, Deny,  Custom),
-        P(ViewAllAccounts)       => (Allow, Allow, Deny,  Custom),
-        P(ViewLoans)             => (Allow, Allow, Deny,  Custom),
-        P(ViewBudget)            => (Allow, Allow, Deny,  Custom),
-        P(ViewReports)           => (Allow, Allow, Deny,  Custom),
-        ManageFamily             => (Allow, Deny,  Deny,  Deny),
+        P(ManageOwnAccounts) => (Allow, Allow, Allow, Custom),
+        P(RecordAnyTransaction) => (Allow, Allow, Deny, Custom),
+        P(ViewAllTransactions) => (Allow, Allow, Deny, Custom),
+        P(ViewAllAccounts) => (Allow, Allow, Deny, Custom),
+        P(ViewLoans) => (Allow, Allow, Deny, Custom),
+        P(ViewBudget) => (Allow, Allow, Deny, Custom),
+        P(ViewReports) => (Allow, Allow, Deny, Custom),
+        ManageFamily => (Allow, Deny, Deny, Deny),
     };
 
     match role {
-        Role::Owner  => owner,
+        Role::Owner => owner,
         Role::Member => member,
-        Role::Child  => child,
-        Role::Other  => other,
+        Role::Child => child,
+        Role::Other => other,
     }
 }
 
@@ -266,7 +275,11 @@ mod tests {
         assert!(Role::Owner.can_access_debt_features(&[]));
         assert!(Role::Member.can_access_debt_features(&[]));
         assert!(Role::Other.can_access_debt_features(&[Permission::ViewLoans]));
-        assert!(Role::Other.assert_debt_access(&[Permission::ViewLoans]).is_ok());
+        assert!(
+            Role::Other
+                .assert_debt_access(&[Permission::ViewLoans])
+                .is_ok()
+        );
 
         assert!(!Role::Other.can_access_debt_features(&[Permission::ViewBudget]));
         assert!(matches!(

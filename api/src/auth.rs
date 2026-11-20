@@ -3,7 +3,8 @@
 //! ## How authentication and multi-family context work
 //!
 //! 1. API Gateway validates the Cognito JWT signature before the request reaches Lambda.
-//! 2. Auth middleware extracts `user_id` (`sub`) and `email` from the validated JWT claims.
+//! 2. Auth middleware extracts `user_id` (`sub`) and optional `email` from the validated JWT claims
+//!    (Access Tokens carry `sub`; ID Tokens also include `email`).
 //! 3. For family-scoped requests, the client sends the active workspace via the `X-Family-Id`
 //!    HTTP header. Auth middleware verifies active membership in `family_members` for
 //!    `(family_id, user_id)` and resolves `role` and `permissions` before inserting `AuthClaims`.
@@ -16,15 +17,17 @@
 use axum::{
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 
 use domain::value_objects::{Email, FamilyId, Permission, Role, UserId};
 
+use crate::errors::ApiError;
+
 /// Authenticated caller and verified family workspace context.
 ///
-/// Populated by auth middleware from the validated Cognito JWT (`user_id`, `email`)
+/// Populated by auth middleware from the validated Cognito JWT (`user_id`, optional `email`)
 /// and verified `X-Family-Id` membership (`family_id`, `role`, `permissions`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthClaims {
@@ -44,22 +47,24 @@ pub struct AuthClaims {
     /// Granular permission flags for `Role::Other` members (from `family_members.permissions`).
     pub permissions: Vec<Permission>,
 
-    /// User's validated and normalized email address from the Cognito JWT `email` claim.
-    pub email: Email,
+    /// User's validated and normalized email address when present in the JWT (Cognito ID tokens).
+    /// `None` for Cognito Access Tokens or email-less federated logins.
+    #[serde(default)]
+    pub email: Option<Email>,
 }
 
 /// Axum extractor that reads `AuthClaims` from request extensions.
 ///
 /// Claims are inserted into request extensions by the `auth_middleware`.
-/// Handlers simply declare `Extension(claims): Extension<AuthClaims>` to receive them.
+/// Handlers declare `claims: AuthClaims` to receive them via [`FromRequestParts`].
 ///
 /// # Example
 ///
 /// ```rust,no_run
-/// use axum::{Extension, Json};
+/// use axum::Json;
 /// use api::auth::AuthClaims;
 ///
-/// async fn get_family(Extension(claims): Extension<AuthClaims>) -> Json<String> {
+/// async fn get_family(claims: AuthClaims) -> Json<String> {
 ///     // claims.family_id is safe to use — verified against family_members
 ///     Json(claims.family_id.to_string())
 /// }
@@ -94,18 +99,12 @@ pub enum AuthError {
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            AuthError::MissingClaims => (StatusCode::UNAUTHORIZED, self.to_string()),
-            AuthError::InvalidClaims(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
-            AuthError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
+        let (status, code) = match &self {
+            AuthError::MissingClaims => (StatusCode::UNAUTHORIZED, "MISSING_CLAIMS"),
+            AuthError::InvalidClaims(_) => (StatusCode::UNAUTHORIZED, "INVALID_CLAIMS"),
+            AuthError::Forbidden(_) => (StatusCode::FORBIDDEN, "FORBIDDEN"),
         };
-
-        #[derive(Serialize)]
-        struct Body {
-            error: String,
-        }
-
-        (status, Json(Body { error: message })).into_response()
+        ApiError::problem(status, code, self.to_string()).into_response()
     }
 }
 
@@ -113,51 +112,78 @@ impl IntoResponse for AuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::to_bytes;
+    use axum::http::header;
 
-    fn sample_claims_json(email: &str) -> serde_json::Value {
-        serde_json::json!({
+    fn sample_claims_json(email: Option<&str>) -> serde_json::Value {
+        let mut obj = serde_json::json!({
             "user_id": UserId::new_v4(),
             "family_id": FamilyId::new_v4(),
             "role": "member",
-            "permissions": [],
-            "email": email
-        })
+            "permissions": []
+        });
+        if let Some(addr) = email {
+            obj["email"] = serde_json::json!(addr);
+        }
+        obj
     }
 
     #[test]
-    fn auth_claims_serde_normalizes_and_round_trips_email() {
-        let claims: AuthClaims =
-            serde_json::from_value(sample_claims_json("  Alice@Example.COM  ")).unwrap();
-        assert_eq!(claims.email.as_ref(), "alice@example.com");
+    fn auth_claims_serde_normalizes_and_round_trips_optional_email() {
+        let with_email: AuthClaims =
+            serde_json::from_value(sample_claims_json(Some("  Alice@Example.COM  "))).unwrap();
+        assert_eq!(
+            with_email.email.as_ref().map(Email::as_str),
+            Some("alice@example.com")
+        );
 
-        let serialized = serde_json::to_value(&claims).unwrap();
+        let serialized = serde_json::to_value(&with_email).unwrap();
         assert_eq!(serialized["email"], "alice@example.com");
+
+        let access_token_claims: AuthClaims =
+            serde_json::from_value(sample_claims_json(None)).unwrap();
+        assert!(access_token_claims.email.is_none());
     }
 
     #[test]
     fn auth_claims_rejects_invalid_or_empty_email() {
-        assert!(serde_json::from_value::<AuthClaims>(sample_claims_json("")).is_err());
-        assert!(serde_json::from_value::<AuthClaims>(sample_claims_json("not-an-email")).is_err());
+        assert!(serde_json::from_value::<AuthClaims>(sample_claims_json(Some(""))).is_err());
+        assert!(
+            serde_json::from_value::<AuthClaims>(sample_claims_json(Some("not-an-email"))).is_err()
+        );
     }
 
-    #[test]
-    fn auth_error_maps_to_expected_http_statuses() {
-        assert_eq!(
-            AuthError::MissingClaims.into_response().status(),
-            StatusCode::UNAUTHORIZED
-        );
-        assert_eq!(
-            AuthError::InvalidClaims("bad token".to_string())
-                .into_response()
-                .status(),
-            StatusCode::UNAUTHORIZED
-        );
+    #[tokio::test]
+    async fn auth_error_maps_to_problem_json_with_expected_statuses_and_codes() {
+        let cases = [
+            (
+                AuthError::MissingClaims,
+                StatusCode::UNAUTHORIZED,
+                "MISSING_CLAIMS",
+            ),
+            (
+                AuthError::InvalidClaims("bad token".to_string()),
+                StatusCode::UNAUTHORIZED,
+                "INVALID_CLAIMS",
+            ),
+            (
+                AuthError::Forbidden(Role::Child),
+                StatusCode::FORBIDDEN,
+                "FORBIDDEN",
+            ),
+        ];
 
-        let forbidden = AuthError::Forbidden(Role::Child);
-        assert_eq!(
-            forbidden.to_string(),
-            "Insufficient permissions for role: child"
-        );
-        assert_eq!(forbidden.into_response().status(), StatusCode::FORBIDDEN);
+        for (err, expected_status, expected_code) in cases {
+            let resp = err.into_response();
+            assert_eq!(resp.status(), expected_status);
+            assert_eq!(
+                resp.headers().get(header::CONTENT_TYPE).unwrap(),
+                "application/problem+json"
+            );
+            let bytes = to_bytes(resp.into_body(), 16 * 1024).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["code"], expected_code);
+            assert_eq!(body["status"], expected_status.as_u16());
+        }
     }
 }

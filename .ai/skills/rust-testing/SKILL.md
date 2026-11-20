@@ -30,8 +30,9 @@ Before authoring tests for a feature or slice, explicitly confirm the target sea
 
 ### A. Spec-Backed Conformance Tests (from `Approved` rules in `backend/specs/`)
 1. **Read Allowed Context Only**: Spec rule + Vocabulary + public Rust signatures/docstrings + test helpers. Do **not** read function implementation bodies or existing inline `#[cfg(test)]` blocks.
+   - *Practical Rust Blindness*: Because `pub` signatures and bodies live in the same `.rs` file, obtain signatures via `cargo doc --no-deps` output or by asking a separate read-only subagent to extract `pub` signatures/docstrings only. When body-isolation cannot be enforced in the current session, explicitly note that constraint for human review.
 2. **Place in Integration Tests**: Write `<crate>/tests/<prefix_lowercase>_<topic>.rs`.
-3. **1:1 Rule ID Traceability**: Cite every rule ID (`"FM-01"` in case table structs or `fn vo_01_...` test names). Only test `Approved` rules (testing `Draft` or `Deprecated` rules is blocked by `spec_traceability`).
+3. **1:1 Rule ID Traceability**: Cite every rule ID (`"FM-01"` in case table structs or `#[test] fn vo_01_...` test names). Only test `Approved` rules (enforced by `spec_traceability`; see [`specs/README.md`](../../../specs/README.md)).
 4. **Mismatches Halt Immediately**: If a faithful spec test turns Red against existing code, **NEVER** alter the assertion or spec rule—report `SPEC–CODE MISMATCH DETECTED` and stop.
 
 ### B. Interactive Red-Green-Refactor (New Features)
@@ -48,7 +49,7 @@ Work **one vertical behavior slice at a time** (never horizontal "write all test
 - **No Tautological Assertions**: Never compute expected test values by repeating the production formula; use independent constants or simple spec oracles.
 - **No Internal Collaboration Mocks**: Only use fakes/spies at architectural port seams (`SpyPublisher`, in-memory repository traits), never mock internal domain structs.
 - **Match Error Variants Explicitly**: Assert `matches!(err, DomainError::CurrencyMismatch { .. })` or HTTP status + `code`, not fragile prose error messages.
-- **Setup `.expect(...)` Only**: `.unwrap()` is denied (`unwrap_used = "deny"` in `Cargo.toml`; `.expect("clear reason")` is permitted only in tests per `clippy.toml`).
+- **`.unwrap()` / `.expect()` Scope**: `Cargo.toml` enforces `unwrap_used = "deny"` and `expect_used = "deny"` in production code. Per `clippy.toml` (`allow-unwrap-in-tests = true`, `allow-expect-in-tests = true`), both `.unwrap()` and `.expect("reason")` are permitted inside `#[test]` / `#[cfg(test)]`; helper functions outside `#[test]` in `tests/*.rs` integration tests must return `Result` and propagate errors into `#[test]` functions.
 - **Verify Traceability & Lints**:
   ```bash
   cargo test -p domain --test spec_traceability

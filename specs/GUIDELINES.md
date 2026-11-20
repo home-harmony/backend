@@ -93,12 +93,12 @@ Changing `Given / When / Then / For all / Oracle` of an `Approved` rule resets i
 
 ### C1. Context Rules for Test Generation
 - **Allowed**: `Approved` rules + `Vocabulary` in `backend/specs/**`, public signatures & doc comments (`pub` items), `backend` test helpers/fakes.
-- **Forbidden**: Reading function implementation bodies or existing inline `#[cfg(test)]` blocks of the unit under test. (When running in a session without body-isolation, explicitly note that blindness was constrained so the human reviews carefully.)
+- **Forbidden**: Reading function implementation bodies or existing inline `#[cfg(test)]` blocks of the unit under test. To stay blind in Rust (where signatures and bodies share a file), read `cargo doc --no-deps` output or delegate `pub` signature/docstring extraction to a separate read-only subagent. (When running in a session without body-isolation, explicitly note that blindness was constrained so the human reviews carefully.)
 
 ### C2. Conventions
 - Place spec tests in `backend/<crate>/tests/<prefix_lowercase>_<topic>.rs`.
 - Include the rule ID in every test function name (`fn fm_01_owner_can_access_debt()`) or table case struct (`id: "FM-01"`).
-- Use `.expect("reason")` only in test setup (per `backend/clippy.toml`).
+- Both `.unwrap()` and `.expect("reason")` are permitted inside `#[test]` / `#[cfg(test)]` per `backend/clippy.toml` (`unwrap_used = "deny"` and `expect_used = "deny"` in production); helpers outside `#[test]` in `tests/*.rs` must return `Result`.
 - Verify with `cargo test -p domain --test spec_traceability` and `cargo clippy --workspace --all-targets -- -D warnings`.
 
 ### C3. Red-Test Protocol (`SPEC–CODE MISMATCH`)

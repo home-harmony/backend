@@ -1,7 +1,7 @@
 # AGENTS.md — HomeHarmony (`backend/` Rust & Aurora DSQL Entry Point)
 
 > Entry point for AI agents working in `backend/`.
-> Also read cross-repo governance and domain rules in [`../documentation/AGENTS.md`](../documentation/AGENTS.md) and [`../documentation/.ai/rules/common.md`](../documentation/.ai/rules/common.md).
+> Also read cross-repo governance and domain rules in [`../documentation/AGENTS.md`](../documentation/AGENTS.md).
 
 ---
 
@@ -18,9 +18,9 @@
 ## 2. Rules & Skills Index
 
 ### A. Modular Rules (Always Enforced)
-- **Common & Governance**: [`../documentation/.ai/rules/common.md`](../documentation/.ai/rules/common.md)
-- **Backend Rust**: [`.ai/rules/backend-rust.md`](./.ai/rules/backend-rust.md)
-- **Aurora DSQL**: [`.ai/rules/aurora-dsql.md`](./.ai/rules/aurora-dsql.md)
+@[Common Workspace Rules](../documentation/.ai/rules/common.md)
+@[Backend Rust Rules](./.ai/rules/backend-rust.md)
+@[Aurora DSQL Rules](./.ai/rules/aurora-dsql.md)
 
 ### B. Skills (Auto-Discovered via `.agents/skills.json`)
 
@@ -43,6 +43,6 @@ Before finishing any code change:
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
-- `cargo test --workspace` includes `domain --test spec_traceability`, enforcing all 4 automated guardrails against `./specs/` (blocks tests on `Draft` rules, `Origin: observed` approvals, unresolved `Open Questions` approvals, and enforces 1:1 coverage for `Approved` rules).
+- `cargo test --workspace` runs `domain --test spec_traceability`, enforcing the automated specification guardrails documented in [`specs/README.md`](./specs/README.md).
 - Run [`code-review`](../documentation/.ai/skills/code-review/SKILL.md) after every coding change.
 - Put temporary scratch notes in `.ai/local/` (gitignored).

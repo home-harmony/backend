@@ -39,6 +39,13 @@ use nutype::nutype;
 )]
 pub struct FamilyName(String);
 
+impl FamilyName {
+    /// Returns the inner string slice.
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {

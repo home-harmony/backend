@@ -1,17 +1,20 @@
-//! `InviteTtl` — strictly positive invite token expiration duration (in seconds).
+//! `InviteTtl` — bounded strictly positive invite token expiration duration (in seconds).
 //!
 //! Backed by [`nutype`]: guarantees at construction and deserialization time that
-//! an invite token always has a strictly positive expiration window (`> 0` seconds).
+//! an invite token always has a strictly positive expiration window (`1..=2_592_000` seconds,
+//! i.e. up to 30 days), preventing eternal tokens and arithmetic panics.
 //!
 //! # Examples
 //! ```
-//! use domain::value_objects::InviteTtl;
+//! use domain::value_objects::{InviteTtl, MAX_INVITE_TTL_SECONDS};
 //!
 //! let ttl = InviteTtl::from_hours(48).unwrap();
 //! assert_eq!(ttl.into_inner(), 48 * 3_600);
+//! assert_eq!(MAX_INVITE_TTL_SECONDS, 30 * 86_400);
 //!
 //! assert!(InviteTtl::try_new(0).is_err());
 //! assert!(InviteTtl::from_hours(-1).is_err());
+//! assert!(InviteTtl::from_days(31).is_err());
 //! ```
 
 use nutype::nutype;
@@ -21,8 +24,11 @@ use crate::errors::DomainError;
 const SECONDS_PER_HOUR: i64 = 3_600;
 const SECONDS_PER_DAY: i64 = 86_400;
 
+/// Maximum invite expiration window in seconds (30 days).
+pub const MAX_INVITE_TTL_SECONDS: i64 = 30 * SECONDS_PER_DAY;
+
 #[nutype(
-    validate(greater = 0),
+    validate(greater = 0, less_or_equal = MAX_INVITE_TTL_SECONDS),
     derive(
         Debug,
         Clone,
@@ -41,7 +47,7 @@ const SECONDS_PER_DAY: i64 = 86_400;
 pub struct InviteTtl(i64);
 
 impl InviteTtl {
-    /// Creates an `InviteTtl` from a positive number of hours.
+    /// Creates an `InviteTtl` from a positive number of hours (`<= 30 days`).
     pub fn from_hours(hours: i64) -> Result<Self, DomainError> {
         let secs =
             hours
@@ -52,7 +58,7 @@ impl InviteTtl {
         Self::try_new(secs).map_err(DomainError::from)
     }
 
-    /// Creates an `InviteTtl` from a positive number of days.
+    /// Creates an `InviteTtl` from a positive number of days (`<= 30 days`).
     pub fn from_days(days: i64) -> Result<Self, DomainError> {
         let secs =
             days.checked_mul(SECONDS_PER_DAY)
@@ -62,23 +68,24 @@ impl InviteTtl {
         Self::try_new(secs).map_err(DomainError::from)
     }
 
-    /// Converts a [`chrono::Duration`] into an `InviteTtl`, rejecting non-positive or sub-second durations.
+    /// Converts a [`chrono::Duration`] into an `InviteTtl`, rejecting non-positive,
+    /// fractional sub-second, or over-limit durations.
     pub fn try_from_duration(duration: chrono::Duration) -> Result<Self, DomainError> {
         if duration <= chrono::Duration::zero() {
             return Err(DomainError::InvalidInviteTtl {
                 reason: "Invite expiration duration must be positive".to_string(),
             });
         }
-        let secs = duration.num_seconds();
-        if secs <= 0 {
+        if duration.subsec_nanos() != 0 {
             return Err(DomainError::InvalidInviteTtl {
-                reason: "Invite expiration duration must be at least 1 second".to_string(),
+                reason: "Invite expiration duration must be a whole number of seconds".to_string(),
             });
         }
-        Self::try_new(secs).map_err(DomainError::from)
+        Self::try_new(duration.num_seconds()).map_err(DomainError::from)
     }
 
     /// Returns the expiration duration as a [`chrono::Duration`].
+    /// Guaranteed panic-free because values are bounded to `1..=MAX_INVITE_TTL_SECONDS`.
     pub fn as_duration(&self) -> chrono::Duration {
         chrono::Duration::seconds(self.into_inner())
     }
@@ -104,7 +111,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn positive_durations_are_accepted() {
+    fn positive_durations_within_limit_are_accepted() {
         let one_sec = InviteTtl::try_new(1).unwrap();
         assert_eq!(one_sec.into_inner(), 1);
         assert_eq!(one_sec.as_duration(), chrono::Duration::seconds(1));
@@ -113,6 +120,13 @@ mod tests {
         let two_days = InviteTtl::from_days(2).unwrap();
         assert_eq!(two_days_hours, two_days);
         assert_eq!(chrono::Duration::from(two_days), chrono::Duration::days(2));
+
+        let max_ttl = InviteTtl::try_new(MAX_INVITE_TTL_SECONDS).unwrap();
+        assert_eq!(max_ttl, InviteTtl::from_days(30).unwrap());
+        assert_eq!(
+            max_ttl.as_duration(),
+            chrono::Duration::seconds(MAX_INVITE_TTL_SECONDS)
+        );
     }
 
     #[test]
@@ -128,13 +142,23 @@ mod tests {
     }
 
     #[test]
-    fn subsecond_positive_duration_is_rejected() {
+    fn subsecond_or_fractional_duration_is_rejected() {
         let half_sec = chrono::Duration::milliseconds(500);
         assert!(InviteTtl::try_from_duration(half_sec).is_err());
+
+        let fractional = chrono::Duration::milliseconds(1_500);
+        assert!(InviteTtl::try_from_duration(fractional).is_err());
     }
 
     #[test]
-    fn overflow_is_rejected() {
+    fn above_max_ttl_and_overflow_are_rejected() {
+        assert!(InviteTtl::try_new(MAX_INVITE_TTL_SECONDS + 1).is_err());
+        assert!(InviteTtl::from_days(31).is_err());
+        assert!(InviteTtl::from_hours(30 * 24 + 1).is_err());
+        assert!(
+            InviteTtl::try_from_duration(chrono::Duration::seconds(MAX_INVITE_TTL_SECONDS + 1))
+                .is_err()
+        );
         assert!(InviteTtl::from_hours(i64::MAX).is_err());
         assert!(InviteTtl::from_days(i64::MAX).is_err());
     }
@@ -147,5 +171,9 @@ mod tests {
 
         assert!(serde_json::from_str::<InviteTtl>("0").is_err());
         assert!(serde_json::from_str::<InviteTtl>("-10").is_err());
+        assert!(
+            serde_json::from_str::<InviteTtl>(&format!("{}", MAX_INVITE_TTL_SECONDS + 1)).is_err()
+        );
+        assert!(serde_json::from_str::<InviteTtl>(&format!("{}", i64::MAX)).is_err());
     }
 }

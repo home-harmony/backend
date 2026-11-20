@@ -5,4 +5,6 @@
 
 pub mod family;
 
-pub use family::{Family, FamilyMember, InviteToken};
+pub use family::{
+    Family, FamilyMember, FamilyMemberParams, FamilyParams, InviteToken, InviteTokenParams,
+};

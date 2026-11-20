@@ -39,6 +39,13 @@ use nutype::nutype;
 )]
 pub struct DisplayName(String);
 
+impl DisplayName {
+    /// Returns the inner string slice.
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {

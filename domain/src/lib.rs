@@ -19,7 +19,7 @@
 //! │   ├── invite_ttl.rs
 //! │   ├── money.rs
 //! │   ├── relationship.rs
-//! │   └── role.rs         (Role, Permission)
+//! │   └── role.rs         (Role, Permission, DomainAction)
 //! ├── events/         — Domain events emitted by aggregates
 //! │   └── mod.rs
 //! ├── errors.rs       — Domain-level error types

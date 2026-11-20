@@ -44,6 +44,7 @@ pub enum DomainEvent {
         member_id: MemberId,
         old_role: Role,
         new_role: Role,
+        permissions: Vec<Permission>,
         changed_by: MemberId,
         occurred_at: DateTime<Utc>,
     },
@@ -123,7 +124,7 @@ mod tests {
         let event = DomainEvent::FamilyCreated {
             family_id,
             name: FamilyName::try_new("Smith Family").unwrap(),
-            home_currency: CurrencyCode::new("USD").unwrap(),
+            home_currency: CurrencyCode::try_new("USD").unwrap(),
             occurred_at,
         };
 

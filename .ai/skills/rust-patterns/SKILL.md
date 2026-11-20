@@ -9,59 +9,40 @@ description: >-
 
 # Rust Clean Code & Architectural Patterns
 
-Load before designing, writing, or refactoring any crate in `backend/` (`domain`, `infrastructure`, `api`, `lambdas/*`).
+Procedural design guide for crates in `backend/` (`domain`, `infrastructure`, `api`, `lambdas/*`). Applies the invariants in [`.ai/rules/backend-rust.md`](../../rules/backend-rust.md) without duplicating them.
 
 ---
 
-## 1. Deep Modules & Hexagonal Seams
+## 1. Design Checks Before Writing Code
 
-- **Deletion Test**: Before adding a struct, service wrapper, or trait, ask: *"If I delete this module, does its complexity disappear (shallow pass-through) or scatter across callers (deep module)?"* Eliminate shallow wrappers.
-- **Hexagonal Boundaries**:
-  - `domain/` owns entities, value objects, domain events, `DomainError`, and repository/provider port traits (zero `sqlx`, `axum`, filesystem, or AWS SDK imports).
-  - `infrastructure/` implements repository traits, Aurora DSQL pools, EventBridge publishers, and FX providers.
-  - `api/` and `lambdas/*` handle Cognito JWT extraction, `X-Family-Id` membership verification, HTTP DTOs, and error translation.
-- **Async Ports via RPITIT & Static Dispatch**:
-  - Define async domain traits using native RPITIT with explicit `+ Send` (keeping domain traits `Send + Sync`, free of `'static`):
-    ```rust
-    pub trait AccountRepository: Send + Sync {
-        fn find_by_id(&self, family_id: FamilyId, id: AccountId)
-            -> impl Future<Output = Result<Option<PaymentAccount>, DomainError>> + Send;
-    }
-    ```
-  - Inject ports via generic type parameters (`struct Service<R> { repo: R }`) for zero-cost static dispatch with both production adapters and test fakes. Reserve `Arc<dyn Trait>` for synchronous traits or open registries.
+1. **Deletion Test (Deep Modules)**: Before introducing a struct, wrapper, or trait, verify that removing it would scatter real complexity across callers rather than eliminating a hollow pass-through.
+2. **Boundary Placement**:
+   - Keep entities, VOs, events, `DomainError`, and repository/provider ports in `domain/` (strictly zero I/O).
+   - Keep `serde` wire DTOs (`api/`) and `sqlx::FromRow` rows (`infrastructure/`) outside `domain/` when shapes differ; map via `TryFrom` or dedicated ACL mappers, and reconstitute private-field aggregates via explicit `reconstitute(...)` parameter structs.
+3. **RPITIT Static-Dispatch Port Pattern**:
+   ```rust
+   pub trait AccountRepository: Send + Sync {
+       fn find_by_id(&self, family_id: FamilyId, id: AccountId)
+           -> impl Future<Output = Result<Option<PaymentAccount>, DomainError>> + Send;
+   }
+   ```
+   Inject via generic type parameters (`struct Service<R> { repo: R }`) for zero-cost static dispatch with adapters and test fakes. Reserve `Arc<dyn Trait>` for synchronous traits or open registries.
 
 ---
 
-## 2. SLAP, SRP & Newspaper File Layout
+## 2. Modeling Idioms
 
-- **Single Responsibility & Single Level of Abstraction (SLAP)**:
-  - **Orchestrators**: Coordinate high-level domain or handler steps via well-named helpers; contain zero inline SQL mapping, loop math, or string parsing.
-  - **Workers**: Perform one focused low-level task (e.g., cursor decoding, row-to-entity mapping, amortization step).
-- **Function Metrics**: Target **10–30 lines** per function (hard ceiling **40 lines**); max nesting **2 levels** using early guard clauses (`?`, `let ... else { return ... }`).
-- **Newspaper Ordering (Top-to-Bottom in Every `.rs` File)**:
-  1. **Imports**: `std` $\rightarrow$ external crates $\rightarrow$ workspace/local crates (`domain`, `crate::...`)
-  2. **Types**: Constants, type aliases, structs, enums
-  3. **Implementations**: Inherent `impl`s first, trait `impl`s second
-  4. **Functions**: Public entry points/orchestrators first, private leaf helpers below
-  5. **Tests**: `#[cfg(test)] mod tests { ... }` at the bottom
+- **Uniform `nutype` Value Objects**: Validate invariants at construction and deserialization using `try_new` (`CurrencyCode::try_new`, `FamilyName::try_new`, `DisplayName::try_new`, `Email::try_new`, `Relationship::try_new`, `InviteTtl::try_new`), expose `.as_str()` on string VOs, and map `*Error` into `DomainError` via `From`.
+- **Enum State Machines & Deterministic Clocks**: Model aggregate lifecycles (`MonthlyBudget` `Draft`/`Active`, `Transaction` kinds) via enums; expose `*_at(..., now: DateTime<Utc>)` core methods with thin `Utc::now()` wrappers so Layer 1 tests stay deterministic.
+- **Checked Financial Math**: Enforce `Money >= 0` on construction, deserialization (`#[serde(try_from = "...")]`), subtraction, and multiplication; use `checked_add` / `checked_sub` / `checked_mul` returning `DomainError::ArithmeticOverflow`. Use `SignedMoney` when negative balances are domain-valid (`AccountBalanceSnapshot`).
+- **Central Exhaustive Error Mapping**: Map every `DomainError` variant exhaustively (no `_ =>` wildcard) in `api/src/errors.rs` to RFC 9457 `application/problem+json` with a distinct machine-readable `code`.
 
 ---
 
-## 3. Domain Modeling & Value Object Idioms
+## 3. Implementation Sequence
 
-- **Mandatory `nutype` & Typed IDs**: Validate scalar invariants at construction (`CurrencyCode::new`, `FamilyName::try_new`, `DisplayName::try_new`, `Email::try_new`). Never pass raw `String`, `Uuid`, or `i64` across domain boundaries.
-- **Exact Money**: Always use `rust_decimal::Decimal` wrapped in `Money` (never `f32`/`f64`).
-- **Enum State Machines & Typestates**: Model aggregate lifecycles (`MonthlyBudget` `Draft`/`Active`, `Transaction` kinds) as enums carrying state-specific data or transitions returning `Result<Self, DomainError>`.
-- **Anti-Corruption Layer (ACL)**: Keep `serde` wire DTOs and `sqlx::FromRow` structs out of `domain/` when external representations differ; translate via explicit `TryFrom` or dedicated mapper functions.
-- **Error Propagation (`thiserror`)**: Define cohesive error enums (`DomainError`) and map them centrally at the API boundary (`api/src/errors.rs`). Never use `.unwrap()` or `.expect()` in production code.
-- **Deterministic Collections**: Use `indexmap::{IndexMap, IndexSet}` whenever field or schedule ordering must remain deterministic.
-
----
-
-## 4. Implementation Sequence
-
-1. Confirm the test seams (`rust-testing`) and inspect relevant `backend/specs/` rules.
-2. Separate orchestrators from leaf helpers and design `nutype`/enum invariants first.
+1. Confirm test seams (`rust-testing`) and inspect relevant `backend/specs/` rules.
+2. Structure each file per [`backend-rust.md`](../../rules/backend-rust.md) (SLAP orchestrators vs. leaf workers, `10–30` lines / max `40`, max nesting `2`, Newspaper ordering).
 3. Implement vertically and verify continuously:
    ```bash
    cargo clippy --workspace --all-targets -- -D warnings

@@ -7,24 +7,33 @@ Structured following Clean Architecture / Domain-Driven Design (DDD).
 
 ```
 backend/
-├── Cargo.toml                  # Workspace definition & shared dependency versions
-├── AGENTS.md                   # Backend Rust & Aurora DSQL engineering rules
+├── Cargo.toml                  # Workspace definition, shared dependencies & lints
+├── clippy.toml                 # Test exemptions for unwrap/expect
+├── AGENTS.md                   # Backend Rust & Aurora DSQL entry point
+├── .agents/skills.json         # Cross-repo skill registration
+├── .ai/                        # Modular rules (backend-rust, aurora-dsql) & backend skills
+├── specs/                      # Declarative behavior specifications (ADR-0019)
+│   ├── domain/                 # Pure domain specs (VO, FM)
+│   └── api/                    # API/handler specs (planned)
 ├── migrations/                 # Aurora DSQL SQL migration files (one DDL per file)
 ├── domain/                     # Pure domain logic — zero I/O dependencies
-│   └── src/
-│       ├── entities/           # Aggregate roots (Family, FamilyMember, InviteToken)
-│       ├── value_objects/      # Immutable domain values (Money, CurrencyCode, Role, Permission, typed IDs)
-│       ├── events/             # Domain events emitted by aggregates
-│       └── errors.rs           # Domain error types
+│   ├── src/
+│   │   ├── entities/           # Aggregate roots (Family, FamilyMember, InviteToken)
+│   │   ├── value_objects/      # Immutable VOs (Money, CurrencyCode, FamilyName, DisplayName, Email, Relationship, InviteTtl, Role, Permission, DomainAction, typed IDs)
+│   │   ├── events/             # Domain events emitted by aggregates
+│   │   ├── errors.rs           # Domain error types
+│   │   └── lib.rs
+│   └── tests/
+│       └── spec_traceability.rs # Spec <-> test governance gate (ADR-0019)
 ├── infrastructure/             # Database repositories & external service adapters
 │   └── src/
 │       └── db/
 │           ├── pool.rs         # Aurora DSQL connection pool (IAM auth via connector)
 │           └── pagination.rs   # Keyset cursor-based pagination utilities
-├── api/                        # Shared Axum middleware, auth extraction, error mapping
+├── api/                        # Shared Axum middleware, auth extraction, RFC 9457 error mapping
 │   └── src/
-│       ├── auth.rs             # AuthClaims extractor (user_id from JWT, family_id from verified X-Family-Id)
-│       ├── errors.rs           # DomainError → HTTP response mapping
+│       ├── auth.rs             # AuthClaims extractor (user_id, optional email, verified X-Family-Id)
+│       ├── errors.rs           # DomainError & AuthError -> RFC 9457 application/problem+json
 │       └── response.rs         # Standard response helpers
 └── lambdas/
     └── migrate_runner/         # Lambda: applies SQL migrations at deploy time
@@ -39,12 +48,22 @@ backend/
 - **Aurora DSQL** via `aurora-dsql-sqlx-connector` (IAM auth + OCC retry)
 - **AWS Lambda** via `lambda_runtime` + `cargo-lambda`
 - **`rust_decimal`** — exact decimal arithmetic for money (never `f64`)
+- **`nutype` + `email_address`** — validated domain value objects at construction and deserialization
 - **`uuid`** v4 for PKs/tokens, v7 for time-sortable append logs and transactions
 
 ## Developer Commands
 
-```powershell
-# Run pure domain unit tests (fast, no DB required)
+```bash
+# Run lints across all crates and tests (zero warnings enforced)
+cargo clippy --workspace --all-targets -- -D warnings
+
+# Run all workspace unit, integration, spec traceability, and doc tests
+cargo test --workspace
+
+# Run declarative spec <-> test traceability gate alone
+cargo test -p domain --test spec_traceability
+
+# Run pure domain tests (fast, no DB required)
 cargo test -p domain
 
 # Run infrastructure integration tests (requires Docker for PostgreSQL)
