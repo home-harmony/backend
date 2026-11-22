@@ -42,3 +42,10 @@ sam delete --stack-name familyledger-data-dev --region us-east-1 --no-prompts
 
 For full event-publishing architecture analysis and cost comparison, see:
 [`documentation/architecture/kinesis-cdc-streaming.md`](../../../documentation/architecture/kinesis-cdc-streaming.md) and [`documentation/decisions/0017-cdc-and-event-publishing-strategies.md`](../../../documentation/decisions/0017-cdc-and-event-publishing-strategies.md).
+
+---
+
+## 3. Complete AWS Bootstrap & Teardown Runbook
+
+For the end-to-end guide covering **Aurora DSQL cluster creation**, **ordered stack deployment**, **`.env.dev` synchronization**, and **complete teardown** (including disabling Aurora DSQL deletion protection and emptying versioned S3 buckets before stack deletion), see:
+[`documentation/architecture/aws-deployment-and-teardown.md`](../../../documentation/architecture/aws-deployment-and-teardown.md).
