@@ -25,7 +25,7 @@
 ## 3. Transactions, Queries & Pagination
 
 - **OCC Retries**: Wrap mutating transactions in `aurora_dsql_sqlx_connector::retry_on_occ` (auto-retries `SQLSTATE 40001`); keep batch writes $\le 500$ rows.
-- **Read-Only Endpoints**: Use **`BEGIN READ ONLY`** for all read-only queries/endpoints.
+- **Read-Only Endpoints**: Start read-only transactions directly with **`pool.begin_with("BEGIN READ ONLY")`** (Aurora DSQL does not support `SET TRANSACTION READ ONLY` after `BEGIN`).
 - **Keyset Pagination Only**: `OFFSET` is strictly banned; use `(occurred_at, id) < ($2, $3)` with limit $\le 50$.
 - **Parameterized Queries**: All SQL queries must be parameterized (`sqlx`); dynamic SQL string concatenation is strictly forbidden.
 - **Offline CI Cache**: Run `cargo sqlx prepare -- --all-targets` after modifying compile-time checked queries.

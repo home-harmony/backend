@@ -166,11 +166,10 @@ fn to_postgres_migration(migration: &Migration) -> Migration {
 }
 
 async fn count_applied_migrations(pool: &PgPool) -> Result<usize> {
-    let mut tx = pool.begin().await.context("Failed to start read tx")?;
-    sqlx::query("SET TRANSACTION READ ONLY")
-        .execute(&mut *tx)
+    let mut tx = pool
+        .begin_with("BEGIN READ ONLY")
         .await
-        .context("Failed to mark _sqlx_migrations read tx READ ONLY")?;
+        .context("Failed to start read-only tx for _sqlx_migrations")?;
 
     let result: std::result::Result<i64, sqlx::Error> =
         sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = true")
@@ -273,11 +272,10 @@ async fn reconcile_async_index_jobs(pool: &PgPool, wait_for_indexes: bool) -> Re
 }
 
 async fn query_pending_async_jobs(pool: &PgPool) -> Result<(Vec<String>, Vec<String>)> {
-    let mut tx = pool.begin().await.context("Failed to start sys.jobs tx")?;
-    sqlx::query("SET TRANSACTION READ ONLY")
-        .execute(&mut *tx)
+    let mut tx = pool
+        .begin_with("BEGIN READ ONLY")
         .await
-        .context("Failed to mark sys.jobs tx READ ONLY")?;
+        .context("Failed to start read-only sys.jobs tx")?;
 
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT job_id::text, LOWER(status) FROM sys.jobs \

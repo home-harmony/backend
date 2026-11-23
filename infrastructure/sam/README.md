@@ -30,18 +30,20 @@ After recreating `familyledger-core-dev`, update `COGNITO_USER_POOL_ID`, `COGNIT
 
 ## 2. Data, Event & Migration Stack (`familyledger-data-dev`)
 
-### Build `migrate_runner` & Deploy (Zero Idle Cost)
-```bash
+### Build `migrate_runner`, Deploy & Invoke (Zero Idle Cost)
+*(Ensure `cargo-lambda >= 1.9.2` and `zig >= 0.17.1` are installed via `scoop update cargo-lambda zig`.)*
+```powershell
 # 1. From backend/: build the ARM64 Lambda binary (outputs target/lambda/migrate_runner/bootstrap)
 cargo lambda build --release --arm64 --package migrate_runner
 
 # 2. From backend/infrastructure/sam/: validate and deploy
 sam validate -t data-stream-template.yaml --lint
-sam deploy --config-file samconfig-data.toml
+sam deploy --template-file data-stream-template.yaml --config-file samconfig-data.toml --capabilities CAPABILITY_NAMED_IAM --no-confirm-changeset
 
-# 3. Invoke the migration runner against Aurora DSQL
-aws lambda invoke --function-name familyledger-migrate-dev --payload '{}' response.json
-cat response.json
+# 3. Invoke the migration runner against Aurora DSQL & verify report
+aws lambda invoke --function-name familyledger-migrate-dev --region us-east-1 --log-type Tail --cli-binary-format raw-in-base64-out --payload '{}' target\migrate-response.json
+Get-Content target\migrate-response.json
+Remove-Item target\migrate-response.json -Force
 ```
 
 ### Delete the Data Stack
