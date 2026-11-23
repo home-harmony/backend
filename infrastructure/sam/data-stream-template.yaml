@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 
-Description: "FamilyLedger — EventBridge Bus and IAM Execution Roles"
+Description: "FamilyLedger — EventBridge Bus, IAM Execution Roles, and Migration Runner Lambda"
 
 Parameters:
   Environment:
@@ -84,6 +84,26 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:dsql:${AWS::Region}:${AWS::AccountId}:cluster/${DsqlClusterIdentifier}"
 
+  # ─── Migration Runner Lambda ─────────────────────────────────────────────────
+  FamilyLedgerMigrateRunnerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "familyledger-migrate-${Environment}"
+      Description: "Applies embedded Aurora DSQL schema migrations at deploy time"
+      CodeUri: ../../target/lambda/migrate_runner/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Architectures:
+        - arm64
+      Role: !GetAtt FamilyLedgerMigrationRunnerRole.Arn
+      MemorySize: 256
+      Timeout: 120
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DSQL_ENDPOINT: !Sub "${DsqlClusterIdentifier}.dsql.${AWS::Region}.on.aws"
+          RUST_LOG: info
+
 Outputs:
   EventBusArn:
     Value: !GetAtt FamilyLedgerEventBus.Arn
@@ -101,3 +121,11 @@ Outputs:
     Value: !GetAtt FamilyLedgerMigrationRunnerRole.Arn
     Export:
       Name: !Sub "${AWS::StackName}-MigrationRunnerRoleArn"
+  MigrateRunnerFunctionName:
+    Value: !Ref FamilyLedgerMigrateRunnerFunction
+    Export:
+      Name: !Sub "${AWS::StackName}-MigrateRunnerFunctionName"
+  MigrateRunnerFunctionArn:
+    Value: !GetAtt FamilyLedgerMigrateRunnerFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-MigrateRunnerFunctionArn"

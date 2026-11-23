@@ -5,7 +5,7 @@ This directory contains Infrastructure-as-Code (IaC) templates for AWS SAM:
 | Stack Name | Template File | Config File | Description | Idle Cost |
 | :--- | :--- | :--- | :--- | :--- |
 | `familyledger-core-dev` | `template.yaml` | `samconfig.toml` | Cognito User Pool (identity only; tenant context via `X-Family-Id`), Web Client, S3 SPA Bucket, CloudFront CDN, API Gateway HTTP API | **$0.00** |
-| `familyledger-data-dev` | `data-stream-template.yaml` | `samconfig-data.toml` | Custom EventBridge Event Bus (`familyledger-events-dev`) and least-privilege IAM Execution Roles (`FamilyLedgerServiceRole`, `FamilyLedgerMigrationRunnerRole`) | **$0.00** |
+| `familyledger-data-dev` | `data-stream-template.yaml` | `samconfig-data.toml` | Custom EventBridge Event Bus (`familyledger-events-dev`), least-privilege IAM Execution Roles (`FamilyLedgerServiceRole`, `FamilyLedgerMigrationRunnerRole`), and `FamilyLedgerMigrateRunnerFunction` (`familyledger-migrate-dev`) | **$0.00** |
 
 > [!NOTE]
 > **Event Publishing Architecture (ADR-0017)**: Amazon Kinesis Data Stream is disabled/removed due to fixed idle hourly fees ($10.80–$28.80/month). Rust service Lambdas publish domain events directly to the EventBridge bus (`events:PutEvents`) at **$0.00 idle cost**.
@@ -28,11 +28,20 @@ After recreating `familyledger-core-dev`, update `COGNITO_USER_POOL_ID`, `COGNIT
 
 ---
 
-## 2. Data & Event Stack (`familyledger-data-dev`)
+## 2. Data, Event & Migration Stack (`familyledger-data-dev`)
 
-### Deploy or Update (Zero Idle Cost)
-```powershell
+### Build `migrate_runner` & Deploy (Zero Idle Cost)
+```bash
+# 1. From backend/: build the ARM64 Lambda binary (outputs target/lambda/migrate_runner/bootstrap)
+cargo lambda build --release --arm64 --package migrate_runner
+
+# 2. From backend/infrastructure/sam/: validate and deploy
+sam validate -t data-stream-template.yaml --lint
 sam deploy --config-file samconfig-data.toml
+
+# 3. Invoke the migration runner against Aurora DSQL
+aws lambda invoke --function-name familyledger-migrate-dev --payload '{}' response.json
+cat response.json
 ```
 
 ### Delete the Data Stack

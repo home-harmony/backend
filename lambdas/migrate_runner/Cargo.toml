@@ -5,10 +5,11 @@ edition.workspace = true
 license.workspace = true
 description = "FamilyLedger — Lambda function that applies Aurora DSQL schema migrations at deploy time."
 
-# This binary is compiled as a custom runtime for AWS Lambda (ARM64).
-# Build with: cargo lambda build --release --arm64
+# Compiled as a custom runtime binary for AWS Lambda (ARM64).
+# Build with: cargo lambda build --release --arm64 --package migrate_runner
+# Outputs: target/lambda/migrate_runner/bootstrap
 [[bin]]
-name = "bootstrap"   # AWS Lambda requires the binary to be named "bootstrap"
+name = "migrate_runner"
 path = "src/main.rs"
 
 [dependencies]
@@ -16,9 +17,6 @@ infrastructure = { path = "../../infrastructure" }
 
 # ── Lambda runtime ─────────────────────────────────────────────────────────────
 lambda_runtime = { workspace = true }
-
-# ── Database ───────────────────────────────────────────────────────────────────
-sqlx = { workspace = true }
 
 # ── Async runtime ─────────────────────────────────────────────────────────────
 tokio = { workspace = true }

@@ -66,6 +66,9 @@ base64 = "0.23.1"
 nutype = { version = "0.8.0", features = ["serde"] }
 email_address = { version = "0.2.9", default-features = false }
 
+# ─── Testing ─────────────────────────────────────────────────────────────────
+testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

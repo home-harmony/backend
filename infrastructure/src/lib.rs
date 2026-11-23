@@ -8,6 +8,7 @@
 //! ```text
 //! infrastructure/
 //! ├── db/
+//! │   ├── migrations.rs   — Aurora DSQL & PG16 migration engine
 //! │   ├── pool.rs         — Aurora DSQL connection pool setup
 //! │   └── pagination.rs   — Keyset cursor encoding/decoding utilities
 //! └── lib.rs
