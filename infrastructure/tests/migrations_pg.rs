@@ -36,7 +36,7 @@ const EXPECTED_TABLES: [&str; 18] = [
     "exchange_rates",
 ];
 
-const EXPECTED_INDEXES: [&str; 16] = [
+const EXPECTED_INDEXES: [&str; 17] = [
     "idx_members_family",
     "idx_accounts_family",
     "idx_balance_snapshots_account",
@@ -53,6 +53,7 @@ const EXPECTED_INDEXES: [&str; 16] = [
     "idx_goals_family",
     "idx_goal_contributions",
     "idx_exchange_rates",
+    "idx_members_user",
 ];
 
 #[tokio::test]
@@ -61,15 +62,15 @@ async fn postgres_applies_all_34_migrations_idempotently_and_enforces_constraint
     let (_container, pool) = start_postgres().await?;
 
     let first_run = run_postgres_migrations(&pool).await?;
-    assert_eq!(first_run.total_migrations, 34);
-    assert_eq!(first_run.applied_now, 34);
+    assert_eq!(first_run.total_migrations, 35);
+    assert_eq!(first_run.applied_now, 35);
     assert_eq!(first_run.already_applied, 0);
     assert_eq!(first_run.active_async_jobs, 0);
 
     let second_run = run_postgres_migrations(&pool).await?;
-    assert_eq!(second_run.total_migrations, 34);
+    assert_eq!(second_run.total_migrations, 35);
     assert_eq!(second_run.applied_now, 0);
-    assert_eq!(second_run.already_applied, 34);
+    assert_eq!(second_run.already_applied, 35);
 
     let tables = fetch_tables(&pool).await?;
     let expected_tables: BTreeSet<String> =

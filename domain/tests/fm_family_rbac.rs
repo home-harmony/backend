@@ -1,450 +1,870 @@
-//! Blind conformance tests for `backend/specs/domain/family-rbac.md` (`FM-01`..`FM-22`).
+//! Blind static-table conformance tests for `backend/specs/domain/family-rbac.md` (`FM-01`..`FM-27`).
 
 use chrono::{DateTime, Duration, Utc};
 
-use domain::entities::{Family, FamilyParams};
+use domain::entities::{Family, FamilyMember, FamilyParams, InviteToken};
 use domain::errors::DomainError;
 use domain::events::DomainEvent;
 use domain::value_objects::{
-    CurrencyCode, DisplayName, FamilyName, InviteTtl, MemberId, Permission, Relationship, Role,
-    UserId,
+    CurrencyCode, DisplayName, FamilyName, InviteTokenId, InviteTtl, MemberId, Permission,
+    Relationship, Role, UserId,
 };
+
+#[derive(Clone, Copy)]
+enum RolePolicyAction {
+    HasPermission(Permission),
+    AllEightPermissions,
+    AllEightNoManageFamily,
+    AssertDebtAccess,
+    AssertFamilyManagement,
+}
+
+#[derive(Clone, Copy)]
+enum RolePolicyExpected {
+    Bool(bool),
+    Ok,
+    InsufficientRole(Role),
+}
+
+struct RolePolicyCase {
+    id: &'static str,
+    role: Role,
+    permissions: &'static [Permission],
+    action: RolePolicyAction,
+    expected: RolePolicyExpected,
+}
+
+#[derive(Clone, Copy)]
+enum FamilyGivenState {
+    ActiveWithMember(Role),
+    SoftDeletedMember,
+    SoftDeletedFamily,
+    ExpiredInviteAtBoundary,
+    ExpiredInviteAfterBoundary,
+    UnknownInvite,
+    UsedInvite,
+    CallerNotInFamily,
+    UnknownTargetMember,
+    SoftDeletedTargetMember,
+    ActiveWithOtherMember,
+}
+
+#[derive(Clone, Copy)]
+enum FamilyRuleAction {
+    AcceptInviteAsExistingActive,
+    AcceptInviteReactivate,
+    CreateInviteOnDeletedFamily,
+    AcceptInviteOnDeletedFamily,
+    ChangeRoleOnDeletedFamily,
+    RemoveMemberOnDeletedFamily,
+    AcceptExpiredOrMissingOrUsedInvite,
+    ChangeRoleToOtherDuplicatePerms,
+    ChangeRoleSameRoleSamePerms,
+    DemoteSelf,
+    RemoveSelf,
+    PromoteMemberToOwner,
+    CallerActionNotInFamily,
+    ChangeRoleUnknownTarget,
+    CreateInviteOwnerRole,
+    CreateInviteCustomPermsOnMember,
+    UpdateProfileAsOwner,
+    UpdateProfileAsMember,
+    UpdateProfileOnDeletedFamily,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FamilyRuleExpected {
+    MemberAlreadyExistsTokenUnused,
+    ReactivatedPreservingMemberId,
+    ErrFamilyDeleted,
+    ErrTokenExpired,
+    ErrInviteTokenNotFound,
+    ErrTokenAlreadyUsed,
+    DeduplicatedOtherPermissionsEvent,
+    NoOpZeroEvents,
+    ErrCannotRemoveOwner,
+    ErrDuplicateOwner,
+    ErrUserNotInFamily,
+    ErrMemberNotFound,
+    ErrInsufficientRole(Role),
+    ErrInvariantViolation,
+    ProfileUpdated,
+}
+
+struct FamilyRuleCase {
+    id: &'static str,
+    given: FamilyGivenState,
+    permissions: &'static [Permission],
+    action: FamilyRuleAction,
+    expected: FamilyRuleExpected,
+}
+
+struct FamilyFixture {
+    family: Family,
+    owner_user_id: UserId,
+    owner_member_id: MemberId,
+    member_user_id: UserId,
+    member_id: MemberId,
+    invite: Option<InviteToken>,
+}
+
+const ALL_EIGHT_PERMS: &[Permission] = &[
+    Permission::RecordOwnTransactions,
+    Permission::RecordAnyTransaction,
+    Permission::ViewAllTransactions,
+    Permission::ViewAllAccounts,
+    Permission::ManageOwnAccounts,
+    Permission::ViewLoans,
+    Permission::ViewBudget,
+    Permission::ViewReports,
+];
+
+const ROLE_POLICY_TABLE: &[RolePolicyCase] = &[
+    RolePolicyCase {
+        id: "FM-01",
+        role: Role::Owner,
+        permissions: &[],
+        action: RolePolicyAction::AllEightPermissions,
+        expected: RolePolicyExpected::Bool(true),
+    },
+    RolePolicyCase {
+        id: "FM-02",
+        role: Role::Member,
+        permissions: &[],
+        action: RolePolicyAction::AllEightNoManageFamily,
+        expected: RolePolicyExpected::Bool(true),
+    },
+    RolePolicyCase {
+        id: "FM-03",
+        role: Role::Child,
+        permissions: &[Permission::ViewLoans],
+        action: RolePolicyAction::HasPermission(Permission::ViewLoans),
+        expected: RolePolicyExpected::Bool(false),
+    },
+    RolePolicyCase {
+        id: "FM-04",
+        role: Role::Child,
+        permissions: &[],
+        action: RolePolicyAction::HasPermission(Permission::RecordOwnTransactions),
+        expected: RolePolicyExpected::Bool(true),
+    },
+    RolePolicyCase {
+        id: "FM-05",
+        role: Role::Other,
+        permissions: &[Permission::ViewLoans],
+        action: RolePolicyAction::HasPermission(Permission::ViewLoans),
+        expected: RolePolicyExpected::Bool(true),
+    },
+    RolePolicyCase {
+        id: "FM-06",
+        role: Role::Child,
+        permissions: &[Permission::ViewLoans],
+        action: RolePolicyAction::AssertDebtAccess,
+        expected: RolePolicyExpected::InsufficientRole(Role::Child),
+    },
+    RolePolicyCase {
+        id: "FM-07",
+        role: Role::Other,
+        permissions: &[Permission::ViewLoans],
+        action: RolePolicyAction::AssertDebtAccess,
+        expected: RolePolicyExpected::Ok,
+    },
+    RolePolicyCase {
+        id: "FM-08",
+        role: Role::Owner,
+        permissions: &[],
+        action: RolePolicyAction::AssertFamilyManagement,
+        expected: RolePolicyExpected::Ok,
+    },
+    RolePolicyCase {
+        id: "FM-09",
+        role: Role::Other,
+        permissions: &[],
+        action: RolePolicyAction::AssertDebtAccess,
+        expected: RolePolicyExpected::InsufficientRole(Role::Other),
+    },
+    RolePolicyCase {
+        id: "FM-10",
+        role: Role::Other,
+        permissions: &[Permission::ViewLoans],
+        action: RolePolicyAction::HasPermission(Permission::ViewBudget),
+        expected: RolePolicyExpected::Bool(false),
+    },
+    RolePolicyCase {
+        id: "FM-11",
+        role: Role::Owner,
+        permissions: &[],
+        action: RolePolicyAction::AssertDebtAccess,
+        expected: RolePolicyExpected::Ok,
+    },
+    RolePolicyCase {
+        id: "FM-12",
+        role: Role::Member,
+        permissions: &[],
+        action: RolePolicyAction::AssertDebtAccess,
+        expected: RolePolicyExpected::Ok,
+    },
+    RolePolicyCase {
+        id: "FM-13",
+        role: Role::Member,
+        permissions: ALL_EIGHT_PERMS,
+        action: RolePolicyAction::AssertFamilyManagement,
+        expected: RolePolicyExpected::InsufficientRole(Role::Member),
+    },
+    RolePolicyCase {
+        id: "FM-13",
+        role: Role::Child,
+        permissions: ALL_EIGHT_PERMS,
+        action: RolePolicyAction::AssertFamilyManagement,
+        expected: RolePolicyExpected::InsufficientRole(Role::Child),
+    },
+    RolePolicyCase {
+        id: "FM-13",
+        role: Role::Other,
+        permissions: ALL_EIGHT_PERMS,
+        action: RolePolicyAction::AssertFamilyManagement,
+        expected: RolePolicyExpected::InsufficientRole(Role::Other),
+    },
+    RolePolicyCase {
+        id: "FM-14",
+        role: Role::Child,
+        permissions: &[],
+        action: RolePolicyAction::HasPermission(Permission::ManageOwnAccounts),
+        expected: RolePolicyExpected::Bool(true),
+    },
+];
+
+const FAMILY_RULE_TABLE: &[FamilyRuleCase] = &[
+    FamilyRuleCase {
+        id: "FM-15",
+        given: FamilyGivenState::ActiveWithMember(Role::Member),
+        permissions: &[],
+        action: FamilyRuleAction::AcceptInviteAsExistingActive,
+        expected: FamilyRuleExpected::MemberAlreadyExistsTokenUnused,
+    },
+    FamilyRuleCase {
+        id: "FM-16",
+        given: FamilyGivenState::SoftDeletedMember,
+        permissions: &[Permission::ViewBudget],
+        action: FamilyRuleAction::AcceptInviteReactivate,
+        expected: FamilyRuleExpected::ReactivatedPreservingMemberId,
+    },
+    FamilyRuleCase {
+        id: "FM-17",
+        given: FamilyGivenState::SoftDeletedFamily,
+        permissions: &[],
+        action: FamilyRuleAction::CreateInviteOnDeletedFamily,
+        expected: FamilyRuleExpected::ErrFamilyDeleted,
+    },
+    FamilyRuleCase {
+        id: "FM-17",
+        given: FamilyGivenState::SoftDeletedFamily,
+        permissions: &[],
+        action: FamilyRuleAction::AcceptInviteOnDeletedFamily,
+        expected: FamilyRuleExpected::ErrFamilyDeleted,
+    },
+    FamilyRuleCase {
+        id: "FM-17",
+        given: FamilyGivenState::SoftDeletedFamily,
+        permissions: &[],
+        action: FamilyRuleAction::ChangeRoleOnDeletedFamily,
+        expected: FamilyRuleExpected::ErrFamilyDeleted,
+    },
+    FamilyRuleCase {
+        id: "FM-17",
+        given: FamilyGivenState::SoftDeletedFamily,
+        permissions: &[],
+        action: FamilyRuleAction::RemoveMemberOnDeletedFamily,
+        expected: FamilyRuleExpected::ErrFamilyDeleted,
+    },
+    FamilyRuleCase {
+        id: "FM-18",
+        given: FamilyGivenState::ExpiredInviteAtBoundary,
+        permissions: &[],
+        action: FamilyRuleAction::AcceptExpiredOrMissingOrUsedInvite,
+        expected: FamilyRuleExpected::ErrTokenExpired,
+    },
+    FamilyRuleCase {
+        id: "FM-18",
+        given: FamilyGivenState::ExpiredInviteAfterBoundary,
+        permissions: &[],
+        action: FamilyRuleAction::AcceptExpiredOrMissingOrUsedInvite,
+        expected: FamilyRuleExpected::ErrTokenExpired,
+    },
+    FamilyRuleCase {
+        id: "FM-19",
+        given: FamilyGivenState::UnknownInvite,
+        permissions: &[],
+        action: FamilyRuleAction::AcceptExpiredOrMissingOrUsedInvite,
+        expected: FamilyRuleExpected::ErrInviteTokenNotFound,
+    },
+    FamilyRuleCase {
+        id: "FM-20",
+        given: FamilyGivenState::ActiveWithMember(Role::Member),
+        permissions: &[Permission::ViewBudget, Permission::ViewBudget],
+        action: FamilyRuleAction::ChangeRoleToOtherDuplicatePerms,
+        expected: FamilyRuleExpected::DeduplicatedOtherPermissionsEvent,
+    },
+    FamilyRuleCase {
+        id: "FM-21",
+        given: FamilyGivenState::ActiveWithOtherMember,
+        permissions: &[Permission::ViewBudget],
+        action: FamilyRuleAction::ChangeRoleSameRoleSamePerms,
+        expected: FamilyRuleExpected::NoOpZeroEvents,
+    },
+    FamilyRuleCase {
+        id: "FM-22",
+        given: FamilyGivenState::ActiveWithMember(Role::Member),
+        permissions: &[],
+        action: FamilyRuleAction::DemoteSelf,
+        expected: FamilyRuleExpected::ErrCannotRemoveOwner,
+    },
+    FamilyRuleCase {
+        id: "FM-22",
+        given: FamilyGivenState::ActiveWithMember(Role::Member),
+        permissions: &[],
+        action: FamilyRuleAction::RemoveSelf,
+        expected: FamilyRuleExpected::ErrCannotRemoveOwner,
+    },
+    FamilyRuleCase {
+        id: "FM-22",
+        given: FamilyGivenState::ActiveWithMember(Role::Member),
+        permissions: &[],
+        action: FamilyRuleAction::PromoteMemberToOwner,
+        expected: FamilyRuleExpected::ErrDuplicateOwner,
+    },
+    FamilyRuleCase {
+        id: "FM-23",
+        given: FamilyGivenState::UsedInvite,
+        permissions: &[],
+        action: FamilyRuleAction::AcceptExpiredOrMissingOrUsedInvite,
+        expected: FamilyRuleExpected::ErrTokenAlreadyUsed,
+    },
+    FamilyRuleCase {
+        id: "FM-24",
+        given: FamilyGivenState::CallerNotInFamily,
+        permissions: &[],
+        action: FamilyRuleAction::CallerActionNotInFamily,
+        expected: FamilyRuleExpected::ErrUserNotInFamily,
+    },
+    FamilyRuleCase {
+        id: "FM-25",
+        given: FamilyGivenState::UnknownTargetMember,
+        permissions: &[],
+        action: FamilyRuleAction::ChangeRoleUnknownTarget,
+        expected: FamilyRuleExpected::ErrMemberNotFound,
+    },
+    FamilyRuleCase {
+        id: "FM-25",
+        given: FamilyGivenState::SoftDeletedTargetMember,
+        permissions: &[],
+        action: FamilyRuleAction::ChangeRoleUnknownTarget,
+        expected: FamilyRuleExpected::ErrMemberNotFound,
+    },
+    FamilyRuleCase {
+        id: "FM-26",
+        given: FamilyGivenState::ActiveWithMember(Role::Member),
+        permissions: &[],
+        action: FamilyRuleAction::CreateInviteOwnerRole,
+        expected: FamilyRuleExpected::ErrDuplicateOwner,
+    },
+    FamilyRuleCase {
+        id: "FM-26",
+        given: FamilyGivenState::ActiveWithMember(Role::Member),
+        permissions: &[Permission::ViewBudget],
+        action: FamilyRuleAction::CreateInviteCustomPermsOnMember,
+        expected: FamilyRuleExpected::ErrInvariantViolation,
+    },
+    FamilyRuleCase {
+        id: "FM-27",
+        given: FamilyGivenState::ActiveWithMember(Role::Member),
+        permissions: &[],
+        action: FamilyRuleAction::UpdateProfileAsOwner,
+        expected: FamilyRuleExpected::ProfileUpdated,
+    },
+    FamilyRuleCase {
+        id: "FM-27",
+        given: FamilyGivenState::ActiveWithMember(Role::Member),
+        permissions: &[],
+        action: FamilyRuleAction::UpdateProfileAsMember,
+        expected: FamilyRuleExpected::ErrInsufficientRole(Role::Member),
+    },
+    FamilyRuleCase {
+        id: "FM-27",
+        given: FamilyGivenState::SoftDeletedFamily,
+        permissions: &[],
+        action: FamilyRuleAction::UpdateProfileOnDeletedFamily,
+        expected: FamilyRuleExpected::ErrFamilyDeleted,
+    },
+];
+
+#[test]
+fn fm_role_policy_table_conforms() {
+    for case in ROLE_POLICY_TABLE {
+        assert_role_policy_case(case);
+    }
+}
+
+#[test]
+fn fm_family_aggregate_rule_table_conforms() {
+    for case in FAMILY_RULE_TABLE {
+        run_family_rule_case(case).unwrap();
+    }
+}
+
+fn assert_role_policy_case(case: &RolePolicyCase) {
+    match (case.action, case.expected) {
+        (RolePolicyAction::HasPermission(perm), RolePolicyExpected::Bool(exp)) => {
+            assert_eq!(
+                case.role.has_permission(case.permissions, perm),
+                exp,
+                "{}",
+                case.id
+            );
+        }
+        (RolePolicyAction::AllEightPermissions, RolePolicyExpected::Bool(exp)) => {
+            for perm in Permission::all() {
+                assert_eq!(
+                    case.role.has_permission(case.permissions, perm),
+                    exp,
+                    "{}",
+                    case.id
+                );
+            }
+        }
+        (RolePolicyAction::AllEightNoManageFamily, RolePolicyExpected::Bool(exp)) => {
+            for perm in Permission::all() {
+                assert_eq!(
+                    case.role.has_permission(case.permissions, perm),
+                    exp,
+                    "{}",
+                    case.id
+                );
+            }
+            assert!(!case.role.can_manage_family(), "{}", case.id);
+        }
+        (RolePolicyAction::AssertDebtAccess, expected) => {
+            assert_role_result(
+                case.id,
+                case.role.assert_debt_access(case.permissions),
+                expected,
+            );
+        }
+        (RolePolicyAction::AssertFamilyManagement, expected) => {
+            assert_role_result(case.id, case.role.assert_family_management(), expected);
+        }
+        _ => panic!("invalid ROLE_POLICY_TABLE combination for {}", case.id),
+    }
+}
+
+fn assert_role_result(id: &str, res: Result<(), DomainError>, expected: RolePolicyExpected) {
+    match expected {
+        RolePolicyExpected::Ok => assert!(res.is_ok(), "{id}: expected Ok, got {res:?}"),
+        RolePolicyExpected::InsufficientRole(role) => {
+            assert_eq!(res, Err(DomainError::InsufficientRole { role }), "{id}");
+        }
+        RolePolicyExpected::Bool(_) => panic!("unexpected Bool expectation for {id}"),
+    }
+}
 
 fn base_time() -> DateTime<Utc> {
     DateTime::UNIX_EPOCH + Duration::days(20_000)
 }
 
-fn create_sample_family() -> Result<(Family, UserId, MemberId), DomainError> {
+fn build_fixture(given: FamilyGivenState) -> Result<FamilyFixture, DomainError> {
     let owner_user_id = UserId::new_v4();
-    let name = FamilyName::try_new("Test Family")?;
-    let currency = CurrencyCode::try_new("USD")?;
-    let owner_name = DisplayName::try_new("Alice")?;
-    let (family, _) = Family::create_at(name, currency, owner_user_id, owner_name, base_time())?;
+    let (mut family, _) = Family::create_at(
+        FamilyName::try_new("Test Family")?,
+        CurrencyCode::try_new("USD")?,
+        owner_user_id,
+        DisplayName::try_new("Alice")?,
+        base_time(),
+    )?;
     let owner_member_id =
         family
             .members()
             .first()
-            .map(|m| m.id())
+            .map(FamilyMember::id)
             .ok_or(DomainError::InvariantViolation {
-                message: "created family must have an owner".to_owned(),
+                message: "missing owner".to_owned(),
             })?;
-    Ok((family, owner_user_id, owner_member_id))
-}
 
-fn invite_and_join(
-    family: &mut Family,
-    owner_user_id: UserId,
-    role: Role,
-    permissions: Vec<Permission>,
-    relationship: Option<Relationship>,
-    join_user_id: UserId,
-) -> Result<MemberId, DomainError> {
-    let ttl = InviteTtl::from_days(7)?;
+    let (member_role, member_perms) = match given {
+        FamilyGivenState::ActiveWithOtherMember => (Role::Other, vec![Permission::ViewBudget]),
+        FamilyGivenState::ActiveWithMember(role) => (role, Vec::new()),
+        _ => (Role::Member, Vec::new()),
+    };
+    let member_user_id = UserId::new_v4();
     let (token, _) = family.create_invite_at(
         owner_user_id,
-        role,
-        permissions,
-        relationship,
-        ttl,
+        member_role,
+        member_perms,
+        None,
+        InviteTtl::from_days(7)?,
         base_time(),
     )?;
-    let display = DisplayName::try_new("Bob")?;
     let (member, _) = family.accept_invite_at(
         token.token(),
-        join_user_id,
-        display,
+        member_user_id,
+        DisplayName::try_new("Bob")?,
         base_time() + Duration::hours(1),
     )?;
-    Ok(member.id())
-}
-
-#[test]
-fn fm_01_owner_has_all_eight_permissions() {
-    for perm in Permission::all() {
-        assert!(Role::Owner.has_permission(&[], perm));
-    }
-}
-
-#[test]
-fn fm_02_member_has_all_eight_permissions_but_cannot_manage_family() {
-    for perm in Permission::all() {
-        assert!(Role::Member.has_permission(&[], perm));
-    }
-    assert!(!Role::Member.can_manage_family());
-}
-
-#[test]
-fn fm_03_child_ignores_custom_view_loans_permission() {
-    assert!(!Role::Child.has_permission(&[Permission::ViewLoans], Permission::ViewLoans));
-}
-
-#[test]
-fn fm_04_child_can_record_own_transactions() {
-    assert!(Role::Child.has_permission(&[], Permission::RecordOwnTransactions));
-}
-
-#[test]
-fn fm_05_other_with_custom_view_loans_has_permission() {
-    assert!(Role::Other.has_permission(&[Permission::ViewLoans], Permission::ViewLoans));
-}
-
-#[test]
-fn fm_06_child_debt_access_is_denied_even_with_custom_flag() {
-    let err = Role::Child
-        .assert_debt_access(&[Permission::ViewLoans])
-        .unwrap_err();
-    assert_eq!(err, DomainError::InsufficientRole { role: Role::Child });
-}
-
-#[test]
-fn fm_07_other_with_view_loans_passes_debt_access() {
-    assert!(
-        Role::Other
-            .assert_debt_access(&[Permission::ViewLoans])
-            .is_ok()
-    );
-}
-
-#[test]
-fn fm_08_owner_passes_family_management() {
-    assert!(Role::Owner.assert_family_management().is_ok());
-}
-
-#[test]
-fn fm_09_other_without_view_loans_fails_debt_access() {
-    let err = Role::Other.assert_debt_access(&[]).unwrap_err();
-    assert_eq!(err, DomainError::InsufficientRole { role: Role::Other });
-}
-
-#[test]
-fn fm_10_other_denies_absent_custom_permission() {
-    assert!(!Role::Other.has_permission(&[Permission::ViewLoans], Permission::ViewBudget));
-}
-
-#[test]
-fn fm_11_owner_passes_debt_access() {
-    assert!(Role::Owner.assert_debt_access(&[]).is_ok());
-}
-
-#[test]
-fn fm_12_member_passes_debt_access() {
-    assert!(Role::Member.assert_debt_access(&[]).is_ok());
-}
-
-#[test]
-fn fm_13_non_owner_roles_cannot_manage_family_even_with_all_flags() {
-    for role in [Role::Member, Role::Child, Role::Other] {
-        assert!(
-            !role.has_permission(&Permission::all(), Permission::ViewBudget) || role != Role::Child
-        );
-        let err = role.assert_family_management().unwrap_err();
-        assert_eq!(err, DomainError::InsufficientRole { role });
-    }
-}
-
-#[test]
-fn fm_14_child_can_manage_own_accounts() {
-    assert!(Role::Child.has_permission(&[], Permission::ManageOwnAccounts));
-}
-
-#[test]
-fn fm_15_accept_invite_rejects_already_active_member_without_consuming_token() {
-    let (mut family, owner_user_id, _) = create_sample_family().unwrap();
-    let existing_user = UserId::new_v4();
-    invite_and_join(
-        &mut family,
+    let member_id = member.id();
+    let invite = prepare_given_state(&mut family, owner_user_id, member_id, given, token)?;
+    Ok(FamilyFixture {
+        family,
         owner_user_id,
+        owner_member_id,
+        member_user_id,
+        member_id,
+        invite,
+    })
+}
+
+fn prepare_given_state(
+    family: &mut Family,
+    owner_user_id: UserId,
+    member_id: MemberId,
+    given: FamilyGivenState,
+    used_token: InviteToken,
+) -> Result<Option<InviteToken>, DomainError> {
+    let t2 = base_time() + Duration::hours(2);
+    match given {
+        FamilyGivenState::SoftDeletedMember | FamilyGivenState::SoftDeletedTargetMember => {
+            family.remove_member_at(owner_user_id, member_id, t2)?;
+            Ok(None)
+        }
+        FamilyGivenState::SoftDeletedFamily => {
+            *family = mark_family_deleted(family, t2);
+            Ok(None)
+        }
+        FamilyGivenState::ExpiredInviteAtBoundary
+        | FamilyGivenState::ExpiredInviteAfterBoundary => {
+            let ttl = InviteTtl::try_new(60)?;
+            let (inv, _) =
+                family.create_invite_at(owner_user_id, Role::Member, vec![], None, ttl, t2)?;
+            Ok(Some(inv))
+        }
+        FamilyGivenState::UsedInvite => Ok(Some(used_token)),
+        _ => Ok(None),
+    }
+}
+
+fn mark_family_deleted(family: &Family, deleted_at: DateTime<Utc>) -> Family {
+    Family::reconstitute(FamilyParams {
+        id: family.id(),
+        name: family.name().clone(),
+        home_currency: family.home_currency().clone(),
+        members: family.members().to_vec(),
+        invite_tokens: family.invite_tokens().to_vec(),
+        created_at: family.created_at(),
+        deleted_at: Some(deleted_at),
+    })
+}
+
+fn run_family_rule_case(case: &FamilyRuleCase) -> Result<(), DomainError> {
+    let mut fx = build_fixture(case.given)?;
+    let now = base_time() + Duration::hours(3);
+
+    match (case.action, case.expected) {
+        (
+            FamilyRuleAction::AcceptInviteAsExistingActive,
+            FamilyRuleExpected::MemberAlreadyExistsTokenUnused,
+        ) => assert_existing_active_rejected(case.id, &mut fx, now),
+        (
+            FamilyRuleAction::AcceptInviteReactivate,
+            FamilyRuleExpected::ReactivatedPreservingMemberId,
+        ) => assert_reactivated(case.id, &mut fx, case.permissions, now),
+        (
+            FamilyRuleAction::ChangeRoleToOtherDuplicatePerms,
+            FamilyRuleExpected::DeduplicatedOtherPermissionsEvent,
+        ) => assert_dedup_role_change(case.id, &mut fx, case.permissions, now),
+        (FamilyRuleAction::ChangeRoleSameRoleSamePerms, FamilyRuleExpected::NoOpZeroEvents) => {
+            let events = fx.family.change_member_role_at(
+                fx.owner_user_id,
+                fx.member_id,
+                Role::Other,
+                case.permissions.to_vec(),
+                now,
+            )?;
+            assert!(events.is_empty(), "{}", case.id);
+            Ok(())
+        }
+        (FamilyRuleAction::UpdateProfileAsOwner, FamilyRuleExpected::ProfileUpdated) => {
+            assert_profile_updated(case.id, &mut fx)
+        }
+        _ => assert_error_rule_case(case, &mut fx, now),
+    }
+}
+
+fn assert_existing_active_rejected(
+    id: &str,
+    fx: &mut FamilyFixture,
+    now: DateTime<Utc>,
+) -> Result<(), DomainError> {
+    let (token, _) = fx.family.create_invite_at(
+        fx.owner_user_id,
         Role::Member,
         vec![],
         None,
-        existing_user,
-    )
-    .unwrap();
-
-    let (second_token, _) = family
-        .create_invite_at(
-            owner_user_id,
-            Role::Member,
-            vec![],
-            None,
-            InviteTtl::from_days(7).unwrap(),
-            base_time() + Duration::hours(2),
-        )
-        .unwrap();
-
-    let err = family
+        InviteTtl::from_days(7)?,
+        now,
+    )?;
+    let err = fx
+        .family
         .accept_invite_at(
-            second_token.token(),
-            existing_user,
-            DisplayName::try_new("Bob Again").unwrap(),
-            base_time() + Duration::hours(3),
+            token.token(),
+            fx.member_user_id,
+            DisplayName::try_new("Dup")?,
+            now,
         )
-        .unwrap_err();
+        .err();
     assert_eq!(
         err,
-        DomainError::MemberAlreadyExists {
-            user_id: existing_user
-        }
+        Some(DomainError::MemberAlreadyExists {
+            user_id: fx.member_user_id
+        }),
+        "{id}"
     );
-
-    let stored = family
+    let stored = fx
+        .family
         .invite_tokens()
         .iter()
-        .find(|t| t.token() == second_token.token())
-        .unwrap();
-    assert!(!stored.is_used());
+        .find(|t| t.token() == token.token());
+    assert!(stored.is_some_and(|t| !t.is_used()), "{id}");
+    Ok(())
 }
 
-#[test]
-fn fm_16_accept_invite_reactivates_soft_deleted_member_preserving_id() {
-    let (mut family, owner_user_id, _) = create_sample_family().unwrap();
-    let member_user = UserId::new_v4();
-    let original_member_id = invite_and_join(
-        &mut family,
-        owner_user_id,
-        Role::Member,
-        vec![],
-        None,
-        member_user,
-    )
-    .unwrap();
-
-    family
-        .remove_member_at(
-            owner_user_id,
-            original_member_id,
-            base_time() + Duration::hours(2),
-        )
-        .unwrap();
-
-    let rel = Relationship::try_new("Grandma").unwrap();
-    let (reinvite, _) = family
-        .create_invite_at(
-            owner_user_id,
-            Role::Other,
-            vec![Permission::ViewBudget],
-            Some(rel.clone()),
-            InviteTtl::from_days(7).unwrap(),
-            base_time() + Duration::hours(3),
-        )
-        .unwrap();
-
-    let (reactivated, events) = family
-        .accept_invite_at(
-            reinvite.token(),
-            member_user,
-            DisplayName::try_new("Grandma Alice").unwrap(),
-            base_time() + Duration::hours(4),
-        )
-        .unwrap();
-
-    assert_eq!(reactivated.id(), original_member_id);
-    assert!(reactivated.deleted_at().is_none());
-    assert!(reactivated.is_active());
-    assert_eq!(reactivated.display_name().as_str(), "Grandma Alice");
-    assert_eq!(reactivated.role(), Role::Other);
-    assert_eq!(reactivated.permissions(), &[Permission::ViewBudget]);
-    assert_eq!(reactivated.relationship(), Some(&rel));
-    assert!(matches!(
-        events.as_slice(),
-        [DomainEvent::MemberJoined { member_id, user_id, role: Role::Other, .. }]
-            if *member_id == original_member_id && *user_id == member_user
-    ));
+fn assert_reactivated(
+    id: &str,
+    fx: &mut FamilyFixture,
+    perms: &[Permission],
+    now: DateTime<Utc>,
+) -> Result<(), DomainError> {
+    let rel = Relationship::try_new("Grandma")?;
+    let (token, _) = fx.family.create_invite_at(
+        fx.owner_user_id,
+        Role::Other,
+        perms.to_vec(),
+        Some(rel.clone()),
+        InviteTtl::from_days(7)?,
+        now,
+    )?;
+    let (member, events) = fx.family.accept_invite_at(
+        token.token(),
+        fx.member_user_id,
+        DisplayName::try_new("Grandma Alice")?,
+        now + Duration::minutes(1),
+    )?;
+    assert_eq!(member.id(), fx.member_id, "{id}");
+    assert!(member.is_active() && member.deleted_at().is_none(), "{id}");
+    assert_eq!(member.relationship(), Some(&rel), "{id}");
+    assert_eq!(member.permissions(), perms, "{id}");
+    assert!(
+        matches!(events.as_slice(), [DomainEvent::MemberJoined { .. }]),
+        "{id}"
+    );
+    Ok(())
 }
 
-#[test]
-fn fm_17_soft_deleted_family_rejects_all_mutations() {
-    let (active_family, owner_user_id, owner_member_id) = create_sample_family().unwrap();
-    let mut deleted = Family::reconstitute(FamilyParams {
-        id: active_family.id(),
-        name: active_family.name().clone(),
-        home_currency: active_family.home_currency().clone(),
-        members: active_family.members().to_vec(),
-        invite_tokens: active_family.invite_tokens().to_vec(),
-        created_at: active_family.created_at(),
-        deleted_at: Some(base_time() + Duration::hours(1)),
-    });
-    assert!(deleted.is_deleted());
-
-    let now = base_time() + Duration::hours(2);
+fn assert_dedup_role_change(
+    id: &str,
+    fx: &mut FamilyFixture,
+    perms: &[Permission],
+    now: DateTime<Utc>,
+) -> Result<(), DomainError> {
+    let events = fx.family.change_member_role_at(
+        fx.owner_user_id,
+        fx.member_id,
+        Role::Other,
+        perms.to_vec(),
+        now,
+    )?;
+    let updated = fx.family.members().iter().find(|m| m.id() == fx.member_id);
     assert_eq!(
-        deleted
+        updated.map(FamilyMember::permissions),
+        Some([Permission::ViewBudget].as_slice()),
+        "{id}"
+    );
+    assert!(
+        matches!(
+            events.as_slice(),
+            [DomainEvent::MemberRoleChanged { new_role: Role::Other, permissions, .. }]
+                if permissions == &[Permission::ViewBudget]
+        ),
+        "{id}"
+    );
+    Ok(())
+}
+
+fn assert_profile_updated(id: &str, fx: &mut FamilyFixture) -> Result<(), DomainError> {
+    let new_name = FamilyName::try_new("Updated Family")?;
+    let new_curr = CurrencyCode::try_new("EUR")?;
+    fx.family
+        .update_profile(fx.owner_user_id, new_name.clone(), new_curr.clone())?;
+    assert_eq!(fx.family.name(), &new_name, "{id}");
+    assert_eq!(fx.family.home_currency(), &new_curr, "{id}");
+    Ok(())
+}
+
+fn assert_error_rule_case(
+    case: &FamilyRuleCase,
+    fx: &mut FamilyFixture,
+    now: DateTime<Utc>,
+) -> Result<(), DomainError> {
+    let err = execute_error_action(case, fx, now)?;
+    match (case.expected, err) {
+        (FamilyRuleExpected::ErrFamilyDeleted, Some(DomainError::FamilyDeleted))
+        | (FamilyRuleExpected::ErrTokenExpired, Some(DomainError::TokenExpired))
+        | (FamilyRuleExpected::ErrInviteTokenNotFound, Some(DomainError::InviteTokenNotFound))
+        | (FamilyRuleExpected::ErrTokenAlreadyUsed, Some(DomainError::TokenAlreadyUsed))
+        | (FamilyRuleExpected::ErrCannotRemoveOwner, Some(DomainError::CannotRemoveOwner))
+        | (FamilyRuleExpected::ErrDuplicateOwner, Some(DomainError::DuplicateOwner))
+        | (FamilyRuleExpected::ErrUserNotInFamily, Some(DomainError::UserNotInFamily { .. }))
+        | (FamilyRuleExpected::ErrMemberNotFound, Some(DomainError::MemberNotFound { .. }))
+        | (
+            FamilyRuleExpected::ErrInvariantViolation,
+            Some(DomainError::InvariantViolation { .. }),
+        ) => Ok(()),
+        (
+            FamilyRuleExpected::ErrInsufficientRole(r1),
+            Some(DomainError::InsufficientRole { role: r2 }),
+        ) if r1 == r2 => Ok(()),
+        (expected, actual) => panic!(
+            "{}: unexpected result {actual:?} for {expected:?}",
+            case.id as &str
+        ),
+    }
+}
+
+fn execute_error_action(
+    case: &FamilyRuleCase,
+    fx: &mut FamilyFixture,
+    now: DateTime<Utc>,
+) -> Result<Option<DomainError>, DomainError> {
+    let bob = DisplayName::try_new("Bob")?;
+    let unknown_user = UserId::new_v4();
+    let unknown_member = MemberId::new_v4();
+    let res = match case.action {
+        FamilyRuleAction::CreateInviteOnDeletedFamily => fx
+            .family
             .create_invite_at(
-                owner_user_id,
+                fx.owner_user_id,
                 Role::Member,
                 vec![],
                 None,
-                InviteTtl::from_days(1).unwrap(),
-                now
+                InviteTtl::from_days(1)?,
+                now,
             )
-            .unwrap_err(),
-        DomainError::FamilyDeleted
-    );
-    assert_eq!(
-        deleted
-            .accept_invite_at(
-                domain::value_objects::InviteTokenId::new_v4(),
-                UserId::new_v4(),
-                DisplayName::try_new("Bob").unwrap(),
-                now
+            .map(|_| ()),
+        FamilyRuleAction::AcceptInviteOnDeletedFamily => fx
+            .family
+            .accept_invite_at(InviteTokenId::new_v4(), unknown_user, bob, now)
+            .map(|_| ()),
+        FamilyRuleAction::ChangeRoleOnDeletedFamily => fx
+            .family
+            .change_member_role_at(
+                fx.owner_user_id,
+                fx.owner_member_id,
+                Role::Member,
+                vec![],
+                now,
             )
-            .unwrap_err(),
-        DomainError::FamilyDeleted
-    );
-    assert_eq!(
-        deleted
-            .change_member_role_at(owner_user_id, owner_member_id, Role::Member, vec![], now)
-            .unwrap_err(),
-        DomainError::FamilyDeleted
-    );
-    assert_eq!(
-        deleted
-            .remove_member_at(owner_user_id, owner_member_id, now)
-            .unwrap_err(),
-        DomainError::FamilyDeleted
-    );
+            .map(|_| ()),
+        FamilyRuleAction::RemoveMemberOnDeletedFamily => fx
+            .family
+            .remove_member_at(fx.owner_user_id, fx.owner_member_id, now)
+            .map(|_| ()),
+        FamilyRuleAction::AcceptExpiredOrMissingOrUsedInvite => {
+            accept_special_invite(case.given, fx, bob, now)
+        }
+        FamilyRuleAction::DemoteSelf => fx
+            .family
+            .change_member_role_at(
+                fx.owner_user_id,
+                fx.owner_member_id,
+                Role::Member,
+                vec![],
+                now,
+            )
+            .map(|_| ()),
+        FamilyRuleAction::RemoveSelf => fx
+            .family
+            .remove_member_at(fx.owner_user_id, fx.owner_member_id, now)
+            .map(|_| ()),
+        FamilyRuleAction::PromoteMemberToOwner => fx
+            .family
+            .change_member_role_at(fx.owner_user_id, fx.member_id, Role::Owner, vec![], now)
+            .map(|_| ()),
+        FamilyRuleAction::CallerActionNotInFamily => fx
+            .family
+            .create_invite_at(
+                unknown_user,
+                Role::Member,
+                vec![],
+                None,
+                InviteTtl::from_days(1)?,
+                now,
+            )
+            .map(|_| ()),
+        FamilyRuleAction::ChangeRoleUnknownTarget => {
+            let target = if matches!(case.given, FamilyGivenState::SoftDeletedTargetMember) {
+                fx.member_id
+            } else {
+                unknown_member
+            };
+            fx.family
+                .change_member_role_at(fx.owner_user_id, target, Role::Child, vec![], now)
+                .map(|_| ())
+        }
+        FamilyRuleAction::CreateInviteOwnerRole => fx
+            .family
+            .create_invite_at(
+                fx.owner_user_id,
+                Role::Owner,
+                vec![],
+                None,
+                InviteTtl::from_days(1)?,
+                now,
+            )
+            .map(|_| ()),
+        FamilyRuleAction::CreateInviteCustomPermsOnMember => fx
+            .family
+            .create_invite_at(
+                fx.owner_user_id,
+                Role::Member,
+                case.permissions.to_vec(),
+                None,
+                InviteTtl::from_days(1)?,
+                now,
+            )
+            .map(|_| ()),
+        FamilyRuleAction::UpdateProfileAsMember
+        | FamilyRuleAction::UpdateProfileOnDeletedFamily => fx.family.update_profile(
+            fx.member_user_id,
+            FamilyName::try_new("Renamed")?,
+            CurrencyCode::try_new("EUR")?,
+        ),
+        _ => Ok(()),
+    };
+    Ok(res.err())
 }
 
-#[test]
-fn fm_18_expired_invite_token_is_rejected_at_or_after_expiration() {
-    let (mut family, owner_user_id, _) = create_sample_family().unwrap();
-    let ttl = InviteTtl::try_new(60).unwrap();
-    let (invite, _) = family
-        .create_invite_at(owner_user_id, Role::Member, vec![], None, ttl, base_time())
-        .unwrap();
-
-    let at_expiry = family
-        .accept_invite_at(
-            invite.token(),
-            UserId::new_v4(),
-            DisplayName::try_new("Bob").unwrap(),
-            invite.expires_at(),
-        )
-        .unwrap_err();
-    assert_eq!(at_expiry, DomainError::TokenExpired);
-
-    let after_expiry = family
-        .accept_invite_at(
-            invite.token(),
-            UserId::new_v4(),
-            DisplayName::try_new("Bob").unwrap(),
-            invite.expires_at() + Duration::seconds(1),
-        )
-        .unwrap_err();
-    assert_eq!(after_expiry, DomainError::TokenExpired);
-}
-
-#[test]
-fn fm_19_unknown_invite_token_returns_invite_token_not_found() {
-    let (mut family, _, _) = create_sample_family().unwrap();
-    let err = family
-        .accept_invite_at(
-            domain::value_objects::InviteTokenId::new_v4(),
-            UserId::new_v4(),
-            DisplayName::try_new("Bob").unwrap(),
-            base_time(),
-        )
-        .unwrap_err();
-    assert_eq!(err, DomainError::InviteTokenNotFound);
-}
-
-#[test]
-fn fm_20_change_member_role_deduplicates_other_permissions_and_emits_event() {
-    let (mut family, owner_user_id, _) = create_sample_family().unwrap();
-    let target_member_id = invite_and_join(
-        &mut family,
-        owner_user_id,
-        Role::Member,
-        vec![],
-        None,
-        UserId::new_v4(),
-    )
-    .unwrap();
-
-    let events = family
-        .change_member_role_at(
-            owner_user_id,
-            target_member_id,
-            Role::Other,
-            vec![Permission::ViewBudget, Permission::ViewBudget],
-            base_time() + Duration::hours(2),
-        )
-        .unwrap();
-
-    let updated = family
-        .members()
-        .iter()
-        .find(|m| m.id() == target_member_id)
-        .unwrap();
-    assert_eq!(updated.role(), Role::Other);
-    assert_eq!(updated.permissions(), &[Permission::ViewBudget]);
-    assert!(matches!(
-        events.as_slice(),
-        [DomainEvent::MemberRoleChanged {
-            member_id,
-            old_role: Role::Member,
-            new_role: Role::Other,
-            permissions,
-            ..
-        }] if *member_id == target_member_id && permissions == &[Permission::ViewBudget]
-    ));
-}
-
-#[test]
-fn fm_21_change_member_role_noop_emits_zero_events() {
-    let (mut family, owner_user_id, _) = create_sample_family().unwrap();
-    let target_member_id = invite_and_join(
-        &mut family,
-        owner_user_id,
-        Role::Other,
-        vec![Permission::ViewBudget],
-        None,
-        UserId::new_v4(),
-    )
-    .unwrap();
-
-    let events = family
-        .change_member_role_at(
-            owner_user_id,
-            target_member_id,
-            Role::Other,
-            vec![Permission::ViewBudget],
-            base_time() + Duration::hours(2),
-        )
-        .unwrap();
-    assert!(events.is_empty());
-}
-
-#[test]
-fn fm_22_owner_cannot_demote_or_remove_self_nor_promote_another_owner() {
-    let (mut family, owner_user_id, owner_member_id) = create_sample_family().unwrap();
-    let member_id = invite_and_join(
-        &mut family,
-        owner_user_id,
-        Role::Member,
-        vec![],
-        None,
-        UserId::new_v4(),
-    )
-    .unwrap();
-    let now = base_time() + Duration::hours(2);
-
-    assert_eq!(
-        family
-            .change_member_role_at(owner_user_id, owner_member_id, Role::Member, vec![], now)
-            .unwrap_err(),
-        DomainError::CannotRemoveOwner
-    );
-    assert_eq!(
-        family
-            .remove_member_at(owner_user_id, owner_member_id, now)
-            .unwrap_err(),
-        DomainError::CannotRemoveOwner
-    );
-    assert_eq!(
-        family
-            .change_member_role_at(owner_user_id, member_id, Role::Owner, vec![], now)
-            .unwrap_err(),
-        DomainError::DuplicateOwner
-    );
+fn accept_special_invite(
+    given: FamilyGivenState,
+    fx: &mut FamilyFixture,
+    bob: DisplayName,
+    now: DateTime<Utc>,
+) -> Result<(), DomainError> {
+    let (token_id, accept_at) = match (given, fx.invite.as_ref()) {
+        (FamilyGivenState::ExpiredInviteAtBoundary, Some(inv)) => (inv.token(), inv.expires_at()),
+        (FamilyGivenState::ExpiredInviteAfterBoundary, Some(inv)) => {
+            (inv.token(), inv.expires_at() + Duration::seconds(1))
+        }
+        (FamilyGivenState::UsedInvite, Some(inv)) => (inv.token(), now),
+        _ => (InviteTokenId::new_v4(), now),
+    };
+    fx.family
+        .accept_invite_at(token_id, UserId::new_v4(), bob, accept_at)
+        .map(|_| ())
 }

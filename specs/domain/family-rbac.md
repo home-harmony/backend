@@ -47,11 +47,11 @@
 | `FM-20` | `Approved` | `human` | Owner targets active member with `Role::Other` and `[ViewBudget, ViewBudget]` | `change_member_role_at(..., Role::Other, perms, now)` | Deduplicates permissions to `[ViewBudget]`, updates role/permissions, emits `MemberRoleChanged` carrying updated `permissions` |
 | `FM-21` | `Approved` | `human` | Owner targets active member with identical `(role, permissions)` | `change_member_role_at(..., same_role, same_perms, now)` | `Ok(vec![])` (no-op emits zero events) |
 | `FM-22` | `Approved` | `human` | Owner attempts to demote self or promote another member to `Role::Owner` | `change_member_role_at(...)` / `remove_member_at(...)` | `Err(DomainError::CannotRemoveOwner)` on Owner demote/remove; `Err(DomainError::DuplicateOwner)` on promotion |
-| `FM-23` | `Draft` | `human` | Active `Family` with invite token where `is_used() == true` | `accept_invite_at(token, user_id, name, now)` | `Err(DomainError::TokenAlreadyUsed)` |
-| `FM-24` | `Draft` | `human` | Active `Family` where `requester_user_id` is absent or soft-deleted | `create_invite_at` / `change_member_role_at` / `remove_member_at` / `update_profile` | `Err(DomainError::UserNotInFamily { user_id })` |
-| `FM-25` | `Draft` | `human` | Active `Family` where `target_member_id` is absent or soft-deleted | `change_member_role_at` / `remove_member_at` | `Err(DomainError::MemberNotFound { member_id })` |
-| `FM-26` | `Draft` | `human` | Active `Family` with `Owner` caller | `create_invite_at(..., Role::Owner, ...)` or `create_invite_at(..., Role::Member \| Child, non_empty_perms, ...)` | `Err(DomainError::DuplicateOwner)` for `Role::Owner`; `Err(DomainError::InvariantViolation { .. })` for custom permissions on non-`Other` |
-| `FM-27` | `Draft` | `human` | Active vs. soft-deleted `Family` with `Owner` or non-`Owner` caller | `update_profile(requester_user_id, new_name, new_home_currency)` | Updates `name` and `home_currency` for active `Owner`; `Err(DomainError::InsufficientRole { role })` for non-`Owner`; `Err(DomainError::FamilyDeleted)` if deleted |
+| `FM-23` | `Approved` | `human` | Active `Family` with invite token where `is_used() == true` | `accept_invite_at(token, user_id, name, now)` | `Err(DomainError::TokenAlreadyUsed)` |
+| `FM-24` | `Approved` | `human` | Active `Family` where `requester_user_id` is absent or soft-deleted | `create_invite_at` / `change_member_role_at` / `remove_member_at` / `update_profile` | `Err(DomainError::UserNotInFamily { user_id })` |
+| `FM-25` | `Approved` | `human` | Active `Family` where `target_member_id` is absent or soft-deleted | `change_member_role_at` / `remove_member_at` | `Err(DomainError::MemberNotFound { member_id })` |
+| `FM-26` | `Approved` | `human` | Active `Family` with `Owner` caller | `create_invite_at(..., Role::Owner, ...)` or `create_invite_at(..., Role::Member \| Child, non_empty_perms, ...)` | `Err(DomainError::DuplicateOwner)` for `Role::Owner`; `Err(DomainError::InvariantViolation { .. })` for custom permissions on non-`Other` |
+| `FM-27` | `Approved` | `human` | Active vs. soft-deleted `Family` with `Owner` or non-`Owner` caller | `update_profile(requester_user_id, new_name, new_home_currency)` | Updates `name` and `home_currency` for active `Owner`; `Err(DomainError::InsufficientRole { role })` for non-`Owner`; `Err(DomainError::FamilyDeleted)` if deleted |
 
 ---
 

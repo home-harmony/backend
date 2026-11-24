@@ -386,6 +386,20 @@ impl Family {
         }])
     }
 
+    /// Updates the family's display name and home display currency (`Role::Owner` only).
+    pub fn update_profile(
+        &mut self,
+        requester_user_id: UserId,
+        new_name: FamilyName,
+        new_home_currency: CurrencyCode,
+    ) -> Result<(), DomainError> {
+        self.ensure_active()?;
+        self.authorize_owner(requester_user_id)?;
+        self.name = new_name;
+        self.home_currency = new_home_currency;
+        Ok(())
+    }
+
     pub fn id(&self) -> FamilyId {
         self.id
     }
@@ -598,6 +612,11 @@ impl FamilyMember {
     /// Asserts that this member can manage family membership (`Role::Owner` only).
     pub fn assert_family_management(&self) -> Result<(), DomainError> {
         self.role.assert_family_management()
+    }
+
+    /// Returns `true` if this member can view the family workspace and active member roster.
+    pub fn can_view_family_workspace(&self) -> bool {
+        self.can_perform(DomainAction::ViewFamilyWorkspace)
     }
 
     /// Returns `true` if this member can access debt/loan features.

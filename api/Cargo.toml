@@ -29,5 +29,8 @@ thiserror = { workspace = true }
 # ── Observability ─────────────────────────────────────────────────────────────
 tracing = { workspace = true }
 
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+
 [lints]
 workspace = true

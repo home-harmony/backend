@@ -4,7 +4,7 @@
 //! in [`action_policy`], giving O(1) lookup and compile-time safety whenever a new
 //! `Permission`, `Role`, or `DomainAction` is added.
 //!
-//! # Authorization Matrix (4 Roles × 9 Actions)
+//! # Authorization Matrix (4 Roles × 10 Actions)
 //!
 //! | Action / Permission      | `Owner` | `Member` | `Child` | `Other`  |
 //! | :----------------------- | :-----: | :------: | :-----: | :------: |
@@ -16,6 +16,7 @@
 //! | `ViewLoans`              | Allow   | Allow    | Deny    | Custom*  |
 //! | `ViewBudget`             | Allow   | Allow    | Deny    | Custom*  |
 //! | `ViewReports`            | Allow   | Allow    | Deny    | Custom*  |
+//! | `ViewFamilyWorkspace`    | Allow   | Allow    | Allow   | Allow    |
 //! | `ManageFamily`           | Allow   | Deny     | Deny    | Deny     |
 //!
 //! \* **`Custom`**: allowed only when the `Permission` flag is explicitly present
@@ -67,6 +68,8 @@ pub enum Role {
 pub enum DomainAction {
     /// Any of the 8 granular ledger/view [`Permission`] flags.
     Permission(Permission),
+    /// Reading family workspace profile and active member roster (any active member).
+    ViewFamilyWorkspace,
     /// Family membership governance: inviting members, changing roles, and removing members.
     ManageFamily,
 }
@@ -124,8 +127,11 @@ impl Role {
             (AccessRule::Custom, DomainAction::Permission(perm)) => {
                 custom_permissions.contains(&perm)
             }
-            // Non-permission governance actions (ManageFamily) cannot be delegated via custom flags.
-            (AccessRule::Custom, DomainAction::ManageFamily) => false,
+            // Non-permission governance/workspace actions cannot be delegated via custom flags.
+            (
+                AccessRule::Custom,
+                DomainAction::ManageFamily | DomainAction::ViewFamilyWorkspace,
+            ) => false,
         }
     }
 
@@ -168,6 +174,16 @@ impl Role {
     /// Asserts that this role can manage family membership (`Role::Owner` only).
     pub fn assert_family_management(&self) -> Result<(), DomainError> {
         self.assert_can_perform(&[], DomainAction::ManageFamily)
+    }
+
+    /// Returns `true` if this role can read the family workspace and active member roster.
+    pub fn can_view_family_workspace(&self) -> bool {
+        self.can_perform(&[], DomainAction::ViewFamilyWorkspace)
+    }
+
+    /// Asserts that this role can read the family workspace and active member roster.
+    pub fn assert_view_family_workspace(&self) -> Result<(), DomainError> {
+        self.assert_can_perform(&[], DomainAction::ViewFamilyWorkspace)
     }
 
     /// Returns `true` if this role and `custom_permissions` allow viewing family reports.
@@ -232,7 +248,7 @@ impl TryFrom<String> for Role {
 /// triggers a compiler error until its policy row/column is explicitly specified here.
 const fn action_policy(action: DomainAction, role: Role) -> AccessRule {
     use AccessRule::{Allow, Custom, Deny};
-    use DomainAction::{ManageFamily, Permission as P};
+    use DomainAction::{ManageFamily, Permission as P, ViewFamilyWorkspace};
     use Permission::*;
 
     //                               Owner  Member Child  Other
@@ -245,6 +261,7 @@ const fn action_policy(action: DomainAction, role: Role) -> AccessRule {
         P(ViewLoans) => (Allow, Allow, Deny, Custom),
         P(ViewBudget) => (Allow, Allow, Deny, Custom),
         P(ViewReports) => (Allow, Allow, Deny, Custom),
+        ViewFamilyWorkspace => (Allow, Allow, Allow, Allow),
         ManageFamily => (Allow, Deny, Deny, Deny),
     };
 

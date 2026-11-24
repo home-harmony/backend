@@ -24,7 +24,7 @@
 ## Rules
 
 ### AU-01 — Missing verified `UserIdentity` returns 401 `MISSING_CLAIMS`
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `adr:0011`
 - **Given**: An HTTP request to any protected route (`/profile/families`, `POST /families`, or any `/families/{id}*` endpoint) without verified `UserIdentity` claims in request extensions.
 - **When**: The request is dispatched through the Axum router via `tower::ServiceExt::oneshot()`.
@@ -32,7 +32,7 @@
 - **Notes**: API Gateway HTTP API `CognitoJwtAuthorizer` populates JWT claims before Lambda execution; missing claims fail closed.
 
 ### AU-02 — Identity-only routes succeed with `UserIdentity` and no `X-Family-Id`
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `adr:0011`
 - **Given**: Valid `UserIdentity` (`sub` UUID, optional `email`) and no `X-Family-Id` header on the request.
 - **When**: Caller invokes `GET /profile/families`, `POST /families`, or `POST /families/{id}/members` (with a valid unused invite token).
@@ -40,7 +40,7 @@
 - **Notes**: Users with zero families or accepting a first invite do not have an active `X-Family-Id` membership yet.
 
 ### AU-03 — Family-scoped route rejects missing or malformed `X-Family-Id`
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `adr:0011`
 - **Given**: Valid `UserIdentity` on a family-scoped route (`GET /families/{id}`, `PUT /families/{id}`, `POST /families/{id}/invites`, `GET /families/{id}/members`, `PATCH /families/{id}/members/{mid}/role`, `DELETE /families/{id}/members/{mid}`).
 - **When**: `X-Family-Id` header is absent/empty, OR `X-Family-Id` is not a valid UUID (e.g., `"not-a-uuid"`).
@@ -48,7 +48,7 @@
 - **Notes**: Validates header syntax before querying `MembershipReader`.
 
 ### AU-04 — Non-member or soft-deleted member receives 403 `USER_NOT_IN_FAMILY`
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `adr:0011`
 - **Given**: Valid `UserIdentity` and valid UUID `X-Family-Id: <F>`, where `MembershipReader` has no active (`deleted_at IS NULL`) membership row for `(F, user_id)` (including when the member was soft-deleted).
 - **When**: Caller invokes any family-scoped route on family `F`.
@@ -56,7 +56,7 @@
 - **Notes**: Preserves strict multi-tenant isolation.
 
 ### AU-05 — Route `{id}` mismatching verified `X-Family-Id` returns 403 `FAMILY_ID_MISMATCH`
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `adr:0011`
 - **Given**: Valid `UserIdentity` who is an active `Owner` of Family `A`, sending `X-Family-Id: A`.
 - **When**: Caller invokes `GET /families/B` (or any `/families/B*` family-scoped route) where `B != A`.
@@ -64,7 +64,7 @@
 - **Notes**: Prevents URL-path tenant spoofing even when `X-Family-Id` is valid.
 
 ### AU-06 — Multi-family caller switches workspace cleanly via `X-Family-Id`
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `adr:0011`
 - **Given**: A single `UserIdentity` who is active `Role::Owner` in Family `A` and active `Role::Child` in Family `B`.
 - **When**: Caller invokes `POST /families/A/invites` with `X-Family-Id: A`, and subsequently invokes `POST /families/B/invites` with `X-Family-Id: B`.
@@ -72,7 +72,7 @@
 - **Notes**: Proves per-request role isolation across workspaces.
 
 ### AU-07 — Any active member can read workspace details and active member roster
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **Given**: Valid `UserIdentity` with active membership in Family `A` under any role (`Owner`, `Member`, `Child`, or `Other` with `permissions = []`) and `X-Family-Id: A`.
 - **When**: Caller invokes `GET /families/A` or `GET /families/A/members`.
@@ -80,7 +80,7 @@
 - **Notes**: Allows workspace switchers and member name display across all member roles.
 
 ### AU-08 — Non-Owner receives 403 `INSUFFICIENT_ROLE` on family management routes
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **Given**: Valid `UserIdentity` with active `Role::Member`, `Role::Child`, or `Role::Other` (even with all 8 `Permission` flags) in Family `A`, sending `X-Family-Id: A`.
 - **When**: Caller invokes `PUT /families/A`, `POST /families/A/invites`, `PATCH /families/A/members/{mid}/role`, or `DELETE /families/A/members/{mid}`.
@@ -99,4 +99,4 @@
 
 | # | Location | Code Says | Doc / ADR Says | Impact |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | `backend/api/src/auth.rs` | Currently defines `AuthClaims` + `AuthError` (`MissingClaims`, `InvalidClaims`, `Forbidden`) | `AU-01`–`AU-08` require separating `UserIdentity` (from API Gateway JWT context) and `X-Family-Id` membership middleware (`MISSING_FAMILY_ID`, `INVALID_FAMILY_ID`, `FAMILY_ID_MISMATCH`, `USER_NOT_IN_FAMILY`) | Scheduled for Slice 0 refactor |
+| 1 | `backend/api/src/auth.rs` | Separates `UserIdentity` (API Gateway JWT claims) from `AuthClaims` (`X-Family-Id` + `MembershipReader` + `FAMILY_ROUTE_POLICIES` table) | `AU-01`–`AU-08` (`Status: Approved`) | Implemented in Slice 0; covered by `api/tests/au_multi_family_auth.rs` |
