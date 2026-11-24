@@ -12,7 +12,7 @@ Parameters:
 
   DsqlClusterIdentifier:
     Type: String
-    Description: Aurora DSQL Cluster Identifier (e.g. 4bublzlvvtnwjpmgtotwrulv7m)
+    Description: Aurora DSQL Cluster Identifier (e.g. exampleclusterid1234567890)
 
 Resources:
   # ─── Custom EventBridge Event Bus ───────────────────────────────────────────

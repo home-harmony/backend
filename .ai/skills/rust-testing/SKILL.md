@@ -20,7 +20,7 @@ Before authoring tests for a feature or slice, explicitly confirm the target sea
 | Layer | Location | Seam Under Test | Dependencies |
 | :--- | :--- | :--- | :--- |
 | **Layer 1 (Pure Domain)** | `domain/tests/<prefix>_*.rs` | Public aggregates, `Money`/`nutype` VOs, `RepaymentPlanCalculator` | Zero I/O, fast (`< 1s`) |
-| **Layer 2a (DB Adapter)** | `infrastructure/tests/*.rs` | Repository ports (`RPITIT`) against PostgreSQL 16 (`testcontainers`) | Docker active, real SQL |
+| **Layer 2a (DB Adapter)** | `infrastructure/tests/*.rs` | Repository ports (`RPITIT`) against PostgreSQL 16 (`testcontainers`) | `cargo test -p infrastructure` runs offline unit + `migration_invariants`; Docker PG tests use `#[ignore]` (`-- --ignored`) |
 | **Layer 2b (API / Handler)** | `api/tests/*.rs` or `lambdas/*/tests/*.rs` | Axum router via `tower::ServiceExt::oneshot()` + `SpyPublisher` / fakes | In-process HTTP + RBAC |
 | **Internal Helpers** | `<crate>/src/**/#[cfg(test)]` | Private algorithms with no public surface | Same module only |
 
@@ -29,11 +29,9 @@ Before authoring tests for a feature or slice, explicitly confirm the target sea
 ## 2. Two Workflows: Blind Spec Tests vs. Interactive TDD
 
 ### A. Spec-Backed Conformance Tests (from `Approved` rules in `backend/specs/`)
-1. **Read Allowed Context Only**: Spec rule + Vocabulary + public Rust signatures/docstrings + test helpers. Do **not** read function implementation bodies or existing inline `#[cfg(test)]` blocks.
-   - *Practical Rust Blindness*: Because `pub` signatures and bodies live in the same `.rs` file, obtain signatures via `cargo doc --no-deps` output or by asking a separate read-only subagent to extract `pub` signatures/docstrings only. When body-isolation cannot be enforced in the current session, explicitly note that constraint for human review.
-2. **Place in Integration Tests**: Write `<crate>/tests/<prefix_lowercase>_<topic>.rs`.
-3. **1:1 Rule ID Traceability**: Cite every rule ID (`"FM-01"` in case table structs or `#[test] fn vo_01_...` test names). Only test `Approved` rules (enforced by `spec_traceability`; see [`specs/README.md`](../../../specs/README.md)).
-4. **Mismatches Halt Immediately**: If a faithful spec test turns Red against existing code, **NEVER** alter the assertion or spec rule—report `SPEC–CODE MISMATCH DETECTED` and stop.
+Follow the blind-generation, `Q1–Q10`, and `SPEC–CODE MISMATCH` governance protocol in [`GUIDELINES.md`](../../../specs/GUIDELINES.md) and `spec-driven-dev`. Rust integration conventions:
+1. **Extract Public Signatures Blindly**: Use `cargo doc --no-deps` or a read-only signature-extraction subagent so implementation bodies and inline `#[cfg(test)]` blocks remain unread.
+2. **Place in Integration Tests**: Write `<crate>/tests/<prefix_lowercase>_<topic>.rs` with 1:1 rule ID citations (`"FM-01"` or `#[test] fn vo_01_...`) for `Approved` rules only (enforced by [`spec_traceability.rs`](../../../domain/tests/spec_traceability.rs)).
 
 ### B. Interactive Red-Green-Refactor (New Features)
 Work **one vertical behavior slice at a time** (never horizontal "write all tests first, then all code"):

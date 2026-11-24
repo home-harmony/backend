@@ -125,11 +125,11 @@ mod tests {
 
     #[test]
     fn bare_hostname_defaults_to_postgres_admin_url_and_parses() {
-        let url = normalize_dsql_url("4bublzlvvtnwjpmgtotwrulv7m.dsql.us-east-1.on.aws", "admin")
+        let url = normalize_dsql_url("exampleclusterid1234567890.dsql.us-east-1.on.aws", "admin")
             .unwrap();
         assert_eq!(
             url,
-            "postgres://admin@4bublzlvvtnwjpmgtotwrulv7m.dsql.us-east-1.on.aws:5432/postgres"
+            "postgres://admin@exampleclusterid1234567890.dsql.us-east-1.on.aws:5432/postgres"
         );
         assert!(DsqlConnectOptions::from_connection_string(&url).is_ok());
     }

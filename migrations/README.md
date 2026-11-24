@@ -1,6 +1,6 @@
 # Aurora DSQL Migration Files
 #
-# RULES (documentation/architecture/aurora-dsql.md + Sprint Plan Task 3.1):
+# RULES (documentation/architecture/aurora-dsql.md + documentation/architecture/database-schema.md):
 #   1. Start every file with `-- no-transaction` on line 1 (prevents sqlx from
 #      combining DDL and `_sqlx_migrations` DML inside the same transaction).
 #   2. Exactly ONE DDL statement per file. Never mix DDL and DML.
@@ -14,5 +14,5 @@
 # File naming convention:
 #   {YYYYMMDDHHMMSS}_{description}.sql
 #
-# The 34 migration files for Sprint 1 (Task 3.1) are placed here.
-# See documentation/roadmap/sprint-1/task_3_1_detailed_guide.md for the full list of files.
+# The 34 migration files for Sprint 1 are placed here.
+# See documentation/architecture/database-schema.md for the full table and index catalog.

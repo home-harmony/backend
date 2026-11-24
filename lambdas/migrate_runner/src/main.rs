@@ -18,7 +18,7 @@
 //! ## Environment Variables
 //!
 //! - `DSQL_ENDPOINT`: Aurora DSQL cluster hostname or `postgres://` URL
-//!   Example: `4bublzlvvtnwjpmgtotwrulv7m.dsql.us-east-1.on.aws`
+//!   Example: `exampleclusterid1234567890.dsql.us-east-1.on.aws`
 //! - `DSQL_USER` *(optional)*: DSQL user (`admin` by default)
 //!
 //! ## Migration Rules (Aurora DSQL)

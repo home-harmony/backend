@@ -26,7 +26,8 @@ Procedural runbook for authoring migrations in `backend/migrations/` and SQLx re
 1. **Scope Every Query**: Filter `WHERE family_id = $1` (from verified `AuthClaims`) and `AND deleted_at IS NULL` unless explicitly querying soft-deleted rows.
 2. **Select Transaction Mode**:
    - **Read endpoints**: Start transactions directly with `pool.begin_with("BEGIN READ ONLY")` (Aurora DSQL rejects `SET TRANSACTION READ ONLY` after `BEGIN`).
-   - **Mutations**: Wrap in `aurora_dsql_sqlx_connector::retry_on_occ` (`SQLSTATE 40001`), keeping batches $\le 500$ rows.
+   - **Mutations**: Wrap in `aurora_dsql_sqlx_connector::retry_on_occ` (`SQLSTATE 40001` / `OC000` / `OC001`), keeping batches $\le 500$ rows.
+   - **Runtime IAM Role (`DSQL_USER`)**: Services running under `FamilyLedgerServiceRole` (`dsql:DbConnect` only) must set `DSQL_USER` to an IAM-mapped non-admin DSQL role (never `"admin"`).
    - **Ledger writes**: Append `TransactionAmendment` (`Reversal` + corrected entry) rather than `UPDATE`/`DELETE`.
 3. **Paginate via Keyset Cursor**: Use `infrastructure::db::pagination::{Page, PageCursor}` with `(occurred_at, id) < ($2, $3) ORDER BY occurred_at DESC, id DESC LIMIT $4` ($\le 50$ items; zero `OFFSET`).
 4. **Keep SQL Parameterized**: Use compile-time checked `sqlx` bindings only (no string interpolation).
@@ -62,6 +63,6 @@ Procedural runbook for authoring migrations in `backend/migrations/` and SQLx re
    ```
 3. **Refresh SQLx Offline Query Cache** (when compile-time `sqlx::query!` macros change; install CLI via `cargo install sqlx-cli@0.9.0 --no-default-features --features postgres,rustls`):
    ```powershell
-   cargo sqlx prepare -- --all-targets
+   cargo sqlx prepare --workspace -- --all-targets
    ```
 4. **Run Workspace Verification Gates**: `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `code-review`.

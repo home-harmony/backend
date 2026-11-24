@@ -18,7 +18,7 @@
 ## 2. Rules & Skills Index
 
 ### A. Modular Rules (Always Enforced)
-@[Common Workspace Rules](../documentation/.ai/rules/common.md)
+- **Common Workspace Rules** (auto-included by [`../documentation/AGENTS.md`](../documentation/AGENTS.md)): [`../documentation/.ai/rules/common.md`](../documentation/.ai/rules/common.md)
 @[Backend Rust Rules](./.ai/rules/backend-rust.md)
 @[Aurora DSQL Rules](./.ai/rules/aurora-dsql.md)
 

@@ -27,7 +27,7 @@
 ## Rules
 
 ### VO-01 — Money construction rejects negative amounts and accepts zero or positive decimals
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `adr:0005`
 - **For all**: `amount: Decimal` and valid `currency: CurrencyCode`.
 - **Then**: `Money::new(amount, currency)` returns `Ok(m)` with `m.amount() == amount` when `amount >= 0`, and `Err(DomainError::NegativeAmount { amount })` when `amount < 0`.
@@ -38,7 +38,7 @@
   - `-0.01 USD` $\rightarrow$ `Err(DomainError::NegativeAmount { .. })`
 
 ### VO-02 — Money addition requires matching CurrencyCode and detects overflow
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `doc:documentation/domain/ubiquitous-language.md`
 - **For all**: Two `Money` values `a(amt_a, cur_a)` and `b(amt_b, cur_b)`.
 - **Then**:
@@ -52,7 +52,7 @@
   - `Decimal::MAX USD + 1 USD` $\rightarrow$ `Err(DomainError::ArithmeticOverflow { .. })`
 
 ### VO-03 — Money subtraction requires matching CurrencyCode and non-negative result
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **For all**: Two `Money` values `a(amt_a, cur_a)` and `b(amt_b, cur_b)`.
 - **Then**:
@@ -67,17 +67,17 @@
   - `50.00 USD - 10.00 MDL` $\rightarrow$ `Err(DomainError::CurrencyMismatch { .. })`
 
 ### VO-04 — CurrencyCode enforces 3 trimmed uppercase ASCII letters
-- **Status**: `Draft`
-- **Origin**: `observed`
+- **Status**: `Approved`
+- **Origin**: `human`
 - **For all**: Input `&str` `raw`.
-- **Then**: `CurrencyCode::try_new(raw)` succeeds iff `raw.trim()` has length `3` and all bytes are ASCII `'A'..='Z'`; otherwise returns `Err(CurrencyCodeError::PredicateViolated)` (which converts into `DomainError::InvalidCurrencyCode { .. }`).
+- **Then**: `CurrencyCode::try_new(raw)` returns `Ok` containing `raw.trim()` iff `raw.trim()` has length `3` and all bytes are ASCII `'A'..='Z'`; otherwise returns `Err(CurrencyCodeError::PredicateViolated)` (which converts into `DomainError::InvalidCurrencyCode { .. }`).
 - **Oracle**: ASCII uppercase length-3 predicate on trimmed input.
 - **Boundary Examples**:
-  - `"USD"`, `"  EUR  "` $\rightarrow$ `Ok`
+  - `"USD"` $\rightarrow$ `Ok("USD")`, `"  EUR  "` $\rightarrow$ `Ok("EUR")`
   - `"usd"`, `"US"`, `"USDD"`, `""`, `"U$D"` $\rightarrow$ `Err`
 
 ### VO-05 — FamilyName trims whitespace and enforces 1..=200 Unicode characters
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `doc:documentation/design-review-2026-08-28.md`
 - **For all**: Input `&str` `raw`.
 - **Then**: `FamilyName::try_new(raw)` returns `Ok` containing `raw.trim()` iff `1 <= trimmed.chars().count() <= 200`; otherwise returns `Err(FamilyNameError::NotEmptyViolated)` or `Err(FamilyNameError::LenCharMaxViolated)` (which convert into `DomainError::InvalidFamilyName { .. }`).
@@ -88,7 +88,7 @@
   - 200 `"a"` chars $\rightarrow$ `Ok`; 201 `"a"` chars $\rightarrow$ `Err(FamilyNameError::LenCharMaxViolated)`
 
 ### VO-06 — Money multiplication and deserialization preserve non-negative and overflow invariants
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **For all**: `Money` `m` and `factor: Decimal`, or JSON payload `{"amount": ..., "currency": ...}`.
 - **Then**:
@@ -101,7 +101,7 @@
   - `serde_json::from_str::<Money>(r#"{"amount":"-1.00","currency":"USD"}"#)` $\rightarrow$ `Err`
 
 ### VO-07 — DisplayName trims whitespace and enforces 1..=100 Unicode characters
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `doc:documentation/architecture/database-schema.md`
 - **For all**: Input `&str` `raw`.
 - **Then**: `DisplayName::try_new(raw)` returns `Ok` containing `raw.trim()` iff `1 <= trimmed.chars().count() <= 100`; otherwise returns `Err(DisplayNameError::NotEmptyViolated)` or `Err(DisplayNameError::LenCharMaxViolated)` (`DomainError::InvalidDisplayName`).
@@ -112,17 +112,17 @@
   - 100 `"a"` chars $\rightarrow$ `Ok`; 101 `"a"` chars $\rightarrow$ `Err`
 
 ### VO-08 — Email trims, lowercases, and enforces bounded RFC address syntax
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **For all**: Input `&str` `raw` and normalized `norm = raw.trim().to_lowercase()`.
-- **Then**: `Email::try_new(raw)` returns `Ok` containing `norm` iff `1 <= norm.len() <= 254` bytes, contains no whitespace/control chars, parses via `email_address` with required TLD (`>= 2` labels), unquoted local part, no display name, no domain literal, valid DNS/IDN labels (`1..=63`, no leading/trailing `-`), and valid TLD (`>= 2` ASCII letters or `xn--...`); otherwise returns `Err(EmailError::NotEmptyViolated | EmailError::PredicateViolated)` (`DomainError::InvalidEmail`).
+- **Then**: `Email::try_new(raw)` returns `Ok` containing `norm` iff `1 <= norm.len() <= 254` bytes, contains no whitespace/control chars, satisfies RFC email syntax with required TLD (`>= 2` labels), unquoted local part, no display name, no domain literal, valid DNS/IDN labels (`1..=63`, no leading/trailing `-`), and valid TLD (`>= 2` ASCII letters or `xn--...`); otherwise returns `Err(EmailError::NotEmptyViolated | EmailError::PredicateViolated)` (`DomainError::InvalidEmail`).
 - **Oracle**: Byte length, character hygiene, and domain/TLD rules on trimmed lowercased input.
 - **Boundary Examples**:
   - `"  Alice@Example.COM  "` $\rightarrow$ `Ok("alice@example.com")`
   - `"alice@localhost"`, `"alice@[127.0.0.1]"`, `"Alice <alice@example.com>"`, `"\"quoted\"@example.com"`, `"alice@example.c"`, `"alice@example.123"`, `255 bytes` $\rightarrow$ `Err`
 
 ### VO-09 — Relationship trims whitespace and enforces 1..=50 Unicode characters
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `doc:documentation/architecture/database-schema.md`
 - **For all**: Input `&str` `raw`.
 - **Then**: `Relationship::try_new(raw)` returns `Ok` containing `raw.trim()` iff `1 <= trimmed.chars().count() <= 50`; otherwise returns `Err(RelationshipError::NotEmptyViolated)` or `Err(RelationshipError::LenCharMaxViolated)` (`DomainError::InvalidRelationship`).
@@ -133,7 +133,7 @@
   - 50 `"a"` chars $\rightarrow$ `Ok`; 51 `"a"` chars $\rightarrow$ `Err`
 
 ### VO-10 — InviteTtl enforces 1..=2_592_000 whole seconds (max 30 days)
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **For all**: `seconds: i64` or `duration: chrono::Duration`.
 - **Then**:
@@ -157,4 +157,4 @@
 
 | # | Location | Code Says | Doc / Spec Says | Impact |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | `backend/domain/src/value_objects/money.rs` | `Money::sub`, `Money::multiply`, checked arithmetic, and `try_from` deserialization enforce `>= 0` and overflow safety | `VO-01`–`VO-03`, `VO-06` (`Origin: human`): `Money` is strictly $\ge 0$; signed balances belong to `SignedMoney` / `AccountBalanceSnapshot` | Code aligned; spec `Draft` pending human approval |
+| 1 | `backend/domain/src/value_objects/money.rs` | `Money::sub`, `Money::multiply`, checked arithmetic, and `try_from` deserialization enforce `>= 0` and overflow safety | `VO-01`–`VO-03`, `VO-06` (`Origin: human`): `Money` is strictly $\ge 0$; signed balances belong to `SignedMoney` / `AccountBalanceSnapshot` | Spec `Approved`; covered by `domain/tests/vo_value_objects.rs` |

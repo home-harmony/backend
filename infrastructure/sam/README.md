@@ -46,6 +46,9 @@ Get-Content target\migrate-response.json
 Remove-Item target\migrate-response.json -Force
 ```
 
+> [!NOTE]
+> **Runtime Database Role (`DSQL_USER`)**: Services running under `FamilyLedgerServiceRole` (`dsql:DbConnect` without `dsql:DbConnectAdmin`) must set `DSQL_USER` to an IAM-mapped non-admin DSQL role (see [`aws-deployment-and-teardown.md`](../../../documentation/architecture/aws-deployment-and-teardown.md)).
+
 ### Delete the Data Stack
 ```powershell
 sam delete --stack-name familyledger-data-dev --region us-east-1 --no-prompts
