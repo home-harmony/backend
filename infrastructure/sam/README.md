@@ -15,17 +15,17 @@ This directory contains Infrastructure-as-Code (IaC) templates for AWS SAM follo
 
 ## 1. Core Stack (`familyledger-core-dev`) — Recreating Cleanly
 
-Amazon Cognito does not support removing custom schema attributes (`family_id`, `family_role`) in-place via CloudFormation update. After removing the legacy `Schema` block (ADR-0011) and adding `X-Family-Id` to API Gateway CORS `AllowHeaders`, recreate the core stack cleanly:
+Amazon Cognito does not support removing custom schema attributes (`family_id`, `family_role`) in-place via CloudFormation update. After removing the legacy `Schema` block (ADR-0011) and moving `FamilyLedgerApi` into `services-template.yaml`, update or recreate the core stack cleanly:
 
 ```powershell
-# 1. Delete existing core stack
+# 1. Delete existing core stack (only if recreating Cognito User Pool cleanly)
 sam delete --stack-name familyledger-core-dev --region us-east-1 --no-prompts
 
-# 2. Deploy clean stack (generates fresh Cognito User Pool & App Client IDs)
-sam deploy --config-file samconfig.toml
+# 2. Deploy clean stack (generates Cognito User Pool, Web Client, S3 SPA Bucket, CloudFront)
+sam deploy --template-file template.yaml --config-file samconfig.toml
 ```
 
-After recreating `familyledger-core-dev`, update `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_ISSUER`, `API_GATEWAY_URL`, and `CLOUDFRONT_URL` in `backend/.env.dev` from the stack outputs.
+After recreating `familyledger-core-dev`, update `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_ISSUER`, and `CLOUDFRONT_URL` in `backend/.env.dev` from the stack outputs (`API_GATEWAY_URL` is exported by `familyledger-services-dev`).
 
 ---
 
@@ -67,14 +67,14 @@ Deploy `familyledger-services-dev` **after** `familyledger-core-dev` (with legac
 # 1. From backend/: build the ARM64 family_service Lambda binary (outputs target/lambda/family_service/bootstrap)
 cargo lambda build --release --arm64 --package family_service
 
-# 2. From backend/infrastructure/sam/: validate and deploy
+# 2. From backend/infrastructure/sam/: validate and deploy (exports ApiGatewayUrl)
 sam validate -t services-template.yaml --lint
 sam deploy --template-file services-template.yaml --config-file samconfig-services.toml --no-confirm-changeset
 ```
 
 ---
 
-## 4. Complete AWS Bootstrap & Teardown Runbook
+## 4. AWS Deployment & Teardown Runbooks
 
-For the end-to-end guide covering **Aurora DSQL cluster creation**, **ordered stack deployment**, **`.env.dev` synchronization**, and **complete teardown** (including disabling Aurora DSQL deletion protection and emptying versioned S3 buckets before stack deletion), see:
-[`documentation/architecture/aws-deployment-and-teardown.md`](../../../documentation/architecture/aws-deployment-and-teardown.md).
+- **Sprint 2 Upgrade & Live Verification Guide (`dev`)**: [`documentation/roadmap/sprint-2/aws-deployment-guide.md`](../../../documentation/roadmap/sprint-2/aws-deployment-guide.md) — step-by-step upgrade from Sprint 1, `familyledger_app` role bootstrap, and live Cognito `IdToken` + `X-Family-Id` smoke tests.
+- **Overall Product AWS Deployment, Operations & Teardown Guide**: [`documentation/architecture/aws-deployment-and-teardown.md`](../../../documentation/architecture/aws-deployment-and-teardown.md) — full Option B2 bootstrap across environments, day-2 operations, clean recreation, and complete teardown.
