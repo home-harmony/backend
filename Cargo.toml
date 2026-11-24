@@ -1,5 +1,5 @@
 [workspace]
-members = ["domain", "infrastructure", "api", "lambdas/migrate_runner"]
+members = ["domain", "infrastructure", "api", "lambdas/migrate_runner", "lambdas/family_service"]
 resolver = "2"
 
 [workspace.package]
@@ -47,9 +47,14 @@ serde_json = "1.0.154"
 
 # ─── HTTP / Lambda ───────────────────────────────────────────────────
 axum = { version = "0.8.9", features = ["macros"] }
+lambda_http = "1"
 lambda_runtime = "1.5.0"
 tower = "0.5.3"
-# Note: `lambda_http`, `tower-http`, and `jsonwebtoken` will be re-added when Sprint 2 HTTP/JWT middleware lands.
+# Note: `tower-http` and `jsonwebtoken` will be re-added when needed.
+
+# ─── AWS SDK ─────────────────────────────────────────────────────────
+aws-config = { version = "1.11.0", features = ["behavior-version-latest"] }
+aws-sdk-eventbridge = "1"
 
 # ─── Observability ───────────────────────────────────────────────────
 tracing = "0.1.44"

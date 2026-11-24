@@ -10,10 +10,15 @@ use std::sync::Arc;
 
 use axum::{
     extract::{FromRequestParts, Request, State},
-    http::{HeaderMap, StatusCode, request::Parts},
+    http::{
+        HeaderMap, StatusCode,
+        request::Parts,
+        uri::{PathAndQuery, Uri},
+    },
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use lambda_http::request::RequestContext;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -219,6 +224,39 @@ impl IntoResponse for AuthError {
     }
 }
 
+/// Extracts [`UserIdentity`] from API Gateway HTTP API (v2) Cognito JWT authorizer claims.
+pub fn extract_user_identity_from_context(ctx: &RequestContext) -> Result<UserIdentity, AuthError> {
+    let RequestContext::ApiGatewayV2(v2) = ctx else {
+        return Err(AuthError::MissingClaims);
+    };
+    let Some(jwt) = v2.authorizer.as_ref().and_then(|a| a.jwt.as_ref()) else {
+        return Err(AuthError::MissingClaims);
+    };
+    let Some(raw_sub) = jwt.claims.get("sub") else {
+        return Err(AuthError::MissingClaims);
+    };
+    let user_id = parse_sub_claim(raw_sub)?;
+    let email = parse_email_claim(jwt.claims.get("email"))?;
+    Ok(UserIdentity { user_id, email })
+}
+
+/// Axum middleware populating [`UserIdentity`] from [`RequestContext`] when not pre-injected.
+pub async fn lambda_identity_middleware(mut req: Request, next: Next) -> Response {
+    if req.extensions().get::<UserIdentity>().is_some() {
+        return next.run(req).await;
+    }
+    let Some(ctx) = req.extensions().get::<RequestContext>() else {
+        return AuthError::MissingClaims.into_response();
+    };
+    match extract_user_identity_from_context(ctx) {
+        Ok(identity) => {
+            req.extensions_mut().insert(identity);
+            next.run(req).await
+        }
+        Err(err) => err.into_response(),
+    }
+}
+
 /// Parses the `X-Family-Id` header into [`FamilyHeaderState`].
 pub fn parse_family_id_header(headers: &HeaderMap) -> FamilyHeaderState {
     let Some(raw) = headers.get(FAMILY_ID_HEADER) else {
@@ -313,6 +351,21 @@ where
     }
 }
 
+/// Strips an API Gateway HTTP API v2 named stage prefix (e.g. `/dev`) before Axum routing,
+/// preserving query strings and leaving `$default` or non-matching paths untouched.
+pub fn strip_apigw_stage_prefix<B>(mut req: axum::http::Request<B>) -> axum::http::Request<B> {
+    let Some(stage) = extract_named_apigw_stage(req.extensions().get::<RequestContext>()) else {
+        return req;
+    };
+    let Some(stripped_path) = strip_stage_segment(req.uri().path(), stage) else {
+        return req;
+    };
+    if let Some(new_uri) = rebuild_uri_with_path(req.uri(), &stripped_path) {
+        *req.uri_mut() = new_uri;
+    }
+    req
+}
+
 async fn resolve_membership<R: MembershipReader>(
     reader: &R,
     identity: Option<&UserIdentity>,
@@ -326,25 +379,75 @@ async fn resolve_membership<R: MembershipReader>(
         .await
 }
 
+fn parse_sub_claim(raw_sub: &str) -> Result<UserId, AuthError> {
+    if raw_sub.trim().is_empty() {
+        return Err(AuthError::InvalidClaims(
+            "JWT 'sub' claim must not be empty".to_owned(),
+        ));
+    }
+    Uuid::parse_str(raw_sub)
+        .map(UserId::from_uuid)
+        .map_err(|err| AuthError::InvalidClaims(format!("Invalid JWT 'sub' UUID: {err}")))
+}
+
+fn parse_email_claim(raw_email: Option<&String>) -> Result<Option<Email>, AuthError> {
+    let Some(raw) = raw_email else {
+        return Ok(None);
+    };
+    Email::try_new(raw.as_str())
+        .map(Some)
+        .map_err(|err| AuthError::InvalidClaims(format!("Invalid JWT 'email' claim: {err}")))
+}
+
+fn extract_named_apigw_stage(ctx: Option<&RequestContext>) -> Option<&str> {
+    let RequestContext::ApiGatewayV2(v2) = ctx? else {
+        return None;
+    };
+    let stage = v2.stage.as_deref()?;
+    if stage.is_empty() || stage == "$default" {
+        return None;
+    }
+    Some(stage)
+}
+
+fn strip_stage_segment(path: &str, stage: &str) -> Option<String> {
+    let prefix = format!("/{stage}");
+    if path == prefix {
+        return Some("/".to_owned());
+    }
+    let rest = path.strip_prefix(&format!("{prefix}/"))?;
+    Some(format!("/{rest}"))
+}
+
+fn rebuild_uri_with_path(uri: &Uri, new_path: &str) -> Option<Uri> {
+    let path_and_query = match uri.query() {
+        Some(query) => format!("{new_path}?{query}"),
+        None => new_path.to_owned(),
+    };
+    let mut parts = uri.clone().into_parts();
+    parts.path_and_query = Some(PathAndQuery::try_from(path_and_query).ok()?);
+    Uri::from_parts(parts).ok()
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use axum::body::to_bytes;
-    use axum::http::header;
+    use std::collections::HashMap;
 
-    fn sample_claims_json(email: Option<&str>) -> serde_json::Value {
-        let mut obj = serde_json::json!({
-            "user_id": UserId::new_v4(),
-            "family_id": FamilyId::new_v4(),
-            "role": "member",
-            "permissions": []
-        });
-        if let Some(addr) = email {
-            obj["email"] = serde_json::json!(addr);
-        }
-        obj
-    }
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        http::header,
+        middleware,
+        routing::get,
+    };
+    use lambda_http::aws_lambda_events::apigw::{
+        ApiGatewayProxyRequestContext, ApiGatewayRequestAuthorizer,
+        ApiGatewayRequestAuthorizerJwtDescription, ApiGatewayV2httpRequestContext,
+    };
+    use tower::ServiceExt;
+
+    use super::*;
 
     #[test]
     fn auth_claims_serde_normalizes_and_round_trips_optional_email() {
@@ -373,50 +476,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_error_maps_to_problem_json_with_expected_statuses_and_codes() {
-        let cases = [
-            (
-                AuthError::MissingClaims,
-                StatusCode::UNAUTHORIZED,
-                "MISSING_CLAIMS",
-            ),
-            (
-                AuthError::InvalidClaims("bad token".to_string()),
-                StatusCode::UNAUTHORIZED,
-                "INVALID_CLAIMS",
-            ),
-            (
-                AuthError::MissingFamilyId,
-                StatusCode::BAD_REQUEST,
-                "MISSING_FAMILY_ID",
-            ),
-            (
-                AuthError::InvalidFamilyId,
-                StatusCode::BAD_REQUEST,
-                "INVALID_FAMILY_ID",
-            ),
-            (
-                AuthError::UserNotInFamily(UserId::new_v4()),
-                StatusCode::FORBIDDEN,
-                "USER_NOT_IN_FAMILY",
-            ),
-            (
-                AuthError::FamilyIdMismatch,
-                StatusCode::FORBIDDEN,
-                "FAMILY_ID_MISMATCH",
-            ),
-            (
-                AuthError::InsufficientRole(Role::Child),
-                StatusCode::FORBIDDEN,
-                "INSUFFICIENT_ROLE",
-            ),
-            (
-                AuthError::Forbidden(Role::Child),
-                StatusCode::FORBIDDEN,
-                "FORBIDDEN",
-            ),
-        ];
-
-        for (err, expected_status, expected_code) in cases {
+        for (err, expected_status, expected_code) in auth_error_cases() {
             let resp = err.into_response();
             assert_eq!(resp.status(), expected_status);
             assert_eq!(
@@ -428,5 +488,238 @@ mod tests {
             assert_eq!(body["code"], expected_code);
             assert_eq!(body["status"], expected_status.as_u16());
         }
+    }
+
+    #[test]
+    fn extract_user_identity_supports_valid_sub_with_and_without_email() {
+        let uid = UserId::new_v4();
+        let with_email = v2_context_with_claims(HashMap::from([
+            ("sub".to_owned(), uid.to_string()),
+            ("email".to_owned(), "  Alice@Example.COM  ".to_owned()),
+        ]));
+        let id = extract_user_identity_from_context(&with_email).unwrap();
+        assert_eq!(id.user_id, uid);
+        assert_eq!(
+            id.email.as_ref().map(Email::as_str),
+            Some("alice@example.com")
+        );
+
+        let without_email =
+            v2_context_with_claims(HashMap::from([("sub".to_owned(), uid.to_string())]));
+        let id_no_email = extract_user_identity_from_context(&without_email).unwrap();
+        assert_eq!(id_no_email.user_id, uid);
+        assert!(id_no_email.email.is_none());
+    }
+
+    #[test]
+    fn extract_user_identity_rejects_missing_context_or_sub() {
+        let v1 = RequestContext::ApiGatewayV1(ApiGatewayProxyRequestContext::default());
+        assert!(matches!(
+            extract_user_identity_from_context(&v1),
+            Err(AuthError::MissingClaims)
+        ));
+
+        let no_auth = RequestContext::ApiGatewayV2(ApiGatewayV2httpRequestContext::default());
+        assert!(matches!(
+            extract_user_identity_from_context(&no_auth),
+            Err(AuthError::MissingClaims)
+        ));
+
+        let missing_sub = v2_context_with_claims(HashMap::new());
+        assert!(matches!(
+            extract_user_identity_from_context(&missing_sub),
+            Err(AuthError::MissingClaims)
+        ));
+    }
+
+    #[test]
+    fn extract_user_identity_rejects_malformed_sub_or_email() {
+        let empty_sub =
+            v2_context_with_claims(HashMap::from([("sub".to_owned(), "   ".to_owned())]));
+        assert!(matches!(
+            extract_user_identity_from_context(&empty_sub),
+            Err(AuthError::InvalidClaims(_))
+        ));
+
+        let bad_sub =
+            v2_context_with_claims(HashMap::from([("sub".to_owned(), "not-a-uuid".to_owned())]));
+        assert!(matches!(
+            extract_user_identity_from_context(&bad_sub),
+            Err(AuthError::InvalidClaims(_))
+        ));
+
+        let bad_email = v2_context_with_claims(HashMap::from([
+            ("sub".to_owned(), UserId::new_v4().to_string()),
+            ("email".to_owned(), "bad-email".to_owned()),
+        ]));
+        assert!(matches!(
+            extract_user_identity_from_context(&bad_email),
+            Err(AuthError::InvalidClaims(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn lambda_identity_middleware_handles_passthrough_context_and_missing() {
+        let app = whoami_app();
+
+        let preset_id = UserId::new_v4();
+        let (s1, b1) = send_identity_request(
+            app.clone(),
+            Some(UserIdentity {
+                user_id: preset_id,
+                email: None,
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (s1, b1.as_slice()),
+            (StatusCode::OK, preset_id.to_string().as_bytes())
+        );
+
+        let ctx_id = UserId::new_v4();
+        let ctx = v2_context_with_claims(HashMap::from([("sub".to_owned(), ctx_id.to_string())]));
+        let (s2, b2) = send_identity_request(app.clone(), None, Some(ctx))
+            .await
+            .unwrap();
+        assert_eq!(
+            (s2, b2.as_slice()),
+            (StatusCode::OK, ctx_id.to_string().as_bytes())
+        );
+
+        let (s3, _) = send_identity_request(app, None, None).await.unwrap();
+        assert_eq!(s3, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn strip_apigw_stage_prefix_strips_named_stage_and_preserves_query()
+    -> Result<(), axum::http::Error> {
+        let cases = [
+            ("/dev/families/123", Some("dev"), "/families/123"),
+            (
+                "/dev/profile/families?cursor=abc&limit=10",
+                Some("dev"),
+                "/profile/families?cursor=abc&limit=10",
+            ),
+            ("/dev", Some("dev"), "/"),
+        ];
+        for (input, stage, expected) in cases {
+            let stripped = strip_apigw_stage_prefix(request_with_stage(input, stage)?);
+            assert_eq!(stripped.uri().to_string(), expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn strip_apigw_stage_prefix_ignores_partial_matches_default_and_missing_stage()
+    -> Result<(), axum::http::Error> {
+        let cases = [
+            ("/developer/foo", Some("dev")),
+            ("/families/123", Some("dev")),
+            ("/dev/families/123", Some("$default")),
+            ("/dev/families/123", None),
+        ];
+        for (input, stage) in cases {
+            let unchanged = strip_apigw_stage_prefix(request_with_stage(input, stage)?);
+            assert_eq!(unchanged.uri().to_string(), input);
+        }
+        Ok(())
+    }
+
+    fn sample_claims_json(email: Option<&str>) -> serde_json::Value {
+        let mut obj = serde_json::json!({
+            "user_id": UserId::new_v4(),
+            "family_id": FamilyId::new_v4(),
+            "role": "member",
+            "permissions": []
+        });
+        if let Some(addr) = email {
+            obj["email"] = serde_json::json!(addr);
+        }
+        obj
+    }
+
+    fn auth_error_cases() -> [(AuthError, StatusCode, &'static str); 8] {
+        use AuthError as E;
+        use StatusCode as S;
+        [
+            (E::MissingClaims, S::UNAUTHORIZED, "MISSING_CLAIMS"),
+            (
+                E::InvalidClaims("bad token".to_owned()),
+                S::UNAUTHORIZED,
+                "INVALID_CLAIMS",
+            ),
+            (E::MissingFamilyId, S::BAD_REQUEST, "MISSING_FAMILY_ID"),
+            (E::InvalidFamilyId, S::BAD_REQUEST, "INVALID_FAMILY_ID"),
+            (
+                E::UserNotInFamily(UserId::new_v4()),
+                S::FORBIDDEN,
+                "USER_NOT_IN_FAMILY",
+            ),
+            (E::FamilyIdMismatch, S::FORBIDDEN, "FAMILY_ID_MISMATCH"),
+            (
+                E::InsufficientRole(Role::Child),
+                S::FORBIDDEN,
+                "INSUFFICIENT_ROLE",
+            ),
+            (E::Forbidden(Role::Child), S::FORBIDDEN, "FORBIDDEN"),
+        ]
+    }
+
+    fn whoami_app() -> Router {
+        async fn whoami(identity: UserIdentity) -> String {
+            identity.user_id.to_string()
+        }
+        Router::new()
+            .route("/whoami", get(whoami))
+            .layer(middleware::from_fn(lambda_identity_middleware))
+    }
+
+    async fn send_identity_request(
+        app: Router,
+        preset: Option<UserIdentity>,
+        ctx: Option<RequestContext>,
+    ) -> Result<(StatusCode, Vec<u8>), String> {
+        let mut req = Request::builder()
+            .uri("/whoami")
+            .body(Body::empty())
+            .map_err(|err| err.to_string())?;
+        if let Some(identity) = preset {
+            req.extensions_mut().insert(identity);
+        }
+        if let Some(context) = ctx {
+            req.extensions_mut().insert(context);
+        }
+        let Ok(resp) = app.oneshot(req).await;
+        let status = resp.status();
+        let bytes = to_bytes(resp.into_body(), 1024)
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok((status, bytes.to_vec()))
+    }
+
+    fn v2_context_with_claims(claims: HashMap<String, String>) -> RequestContext {
+        let mut jwt = ApiGatewayRequestAuthorizerJwtDescription::default();
+        jwt.claims = claims;
+        let mut authorizer = ApiGatewayRequestAuthorizer::default();
+        authorizer.jwt = Some(jwt);
+        let mut v2 = ApiGatewayV2httpRequestContext::default();
+        v2.authorizer = Some(authorizer);
+        RequestContext::ApiGatewayV2(v2)
+    }
+
+    fn request_with_stage(
+        uri: &str,
+        stage: Option<&str>,
+    ) -> Result<axum::http::Request<Body>, axum::http::Error> {
+        let mut req = axum::http::Request::builder()
+            .uri(uri)
+            .body(Body::empty())?;
+        let mut v2 = ApiGatewayV2httpRequestContext::default();
+        v2.stage = stage.map(ToOwned::to_owned);
+        req.extensions_mut()
+            .insert(RequestContext::ApiGatewayV2(v2));
+        Ok(req)
     }
 }

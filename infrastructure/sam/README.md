@@ -1,12 +1,12 @@
 # FamilyLedger — AWS SAM Infrastructure Stacks
 
-This directory contains Infrastructure-as-Code (IaC) templates for AWS SAM (transitioning in Sprint 2 Slice 5 to the **Option B2 3-Stack 1-Way DAG**):
+This directory contains Infrastructure-as-Code (IaC) templates for AWS SAM following the **Option B2 3-Stack 1-Way DAG** (`services` $\rightarrow$ `core` & `data`):
 
 | Stack Name | Template File | Config File | Description | Idle Cost |
 | :--- | :--- | :--- | :--- | :--- |
-| `familyledger-core-dev` | `template.yaml` | `samconfig.toml` | Cognito User Pool (identity only; tenant context via `X-Family-Id`), Web Client, S3 SPA Bucket, CloudFront CDN *(+ `FamilyLedgerApi` until Sprint 2 Slice 5 moves it to `services`)* | **$0.00** |
+| `familyledger-core-dev` | `template.yaml` | `samconfig.toml` | Cognito User Pool (identity only; tenant context via `X-Family-Id`), Web Client, S3 SPA Bucket, CloudFront CDN | **$0.00** |
 | `familyledger-data-dev` | `data-stream-template.yaml` | `samconfig-data.toml` | Custom EventBridge Event Bus (`familyledger-events-dev`), least-privilege IAM Execution Roles (`FamilyLedgerServiceRole`, `FamilyLedgerMigrationRunnerRole`), and `FamilyLedgerMigrateRunnerFunction` (`familyledger-migrate-dev`) | **$0.00** |
-| `familyledger-services-dev` *(Sprint 2 Slice 5)* | `services-template.yaml` | `samconfig-services.toml` | API Gateway HTTP API (`CognitoJwtAuthorizer` + `X-Family-Id` CORS) and stateless Rust HTTP Lambdas (`family_service` with `DSQL_USER=familyledger_app`, importing exports from `core` and `data`) | **$0.00** |
+| `familyledger-services-dev` | `services-template.yaml` | `samconfig-services.toml` | API Gateway HTTP API (`CognitoJwtAuthorizer` + `X-Family-Id` CORS) and stateless Rust HTTP Lambdas (`family_service` with `DSQL_USER=familyledger_app`, importing exports from `core` and `data`) | **$0.00** |
 
 > [!NOTE]
 > **Event Publishing Architecture (ADR-0017)**: Amazon Kinesis Data Stream is disabled/removed due to fixed idle hourly fees ($10.80–$28.80/month). Rust service Lambdas publish domain events directly to the EventBridge bus (`events:PutEvents`) at **$0.00 idle cost**.
@@ -51,18 +51,30 @@ Remove-Item target\migrate-response.json -Force
 > **Runtime Database Role (`DSQL_USER`)**: Services running under `FamilyLedgerServiceRole` (`dsql:DbConnect` without `dsql:DbConnectAdmin`) must set `DSQL_USER` to an IAM-mapped non-admin DSQL role (see [`aws-deployment-and-teardown.md`](../../../documentation/architecture/aws-deployment-and-teardown.md)).
 
 ### Delete the Services & Data Stacks
-*(Once `familyledger-services-dev` is deployed in Sprint 2 Slice 5, always delete `familyledger-services-dev` before `familyledger-data-dev` and `familyledger-core-dev` because `services` imports CloudFormation exports from both.)*
+*(Always delete `familyledger-services-dev` before `familyledger-data-dev` and `familyledger-core-dev` because `services` imports CloudFormation exports from both.)*
 ```powershell
 sam delete --stack-name familyledger-services-dev --region us-east-1 --no-prompts
 sam delete --stack-name familyledger-data-dev --region us-east-1 --no-prompts
 ```
 
-For full event-publishing architecture analysis and cost comparison, see:
-[`documentation/architecture/kinesis-cdc-streaming.md`](../../../documentation/architecture/kinesis-cdc-streaming.md) and [`documentation/decisions/0017-cdc-and-event-publishing-strategies.md`](../../../documentation/decisions/0017-cdc-and-event-publishing-strategies.md).
+---
+
+## 3. Services Stack (`familyledger-services-dev`)
+
+Deploy `familyledger-services-dev` **after** `familyledger-core-dev` (with legacy `FamilyLedgerApi` removed from `template.yaml`), `familyledger-data-dev`, `migrate_runner` invocation (`36` migrations), and the `familyledger_app` Aurora DSQL role bootstrap:
+
+```powershell
+# 1. From backend/: build the ARM64 family_service Lambda binary (outputs target/lambda/family_service/bootstrap)
+cargo lambda build --release --arm64 --package family_service
+
+# 2. From backend/infrastructure/sam/: validate and deploy
+sam validate -t services-template.yaml --lint
+sam deploy --template-file services-template.yaml --config-file samconfig-services.toml --no-confirm-changeset
+```
 
 ---
 
-## 3. Complete AWS Bootstrap & Teardown Runbook
+## 4. Complete AWS Bootstrap & Teardown Runbook
 
 For the end-to-end guide covering **Aurora DSQL cluster creation**, **ordered stack deployment**, **`.env.dev` synchronization**, and **complete teardown** (including disabling Aurora DSQL deletion protection and emptying versioned S3 buckets before stack deletion), see:
 [`documentation/architecture/aws-deployment-and-teardown.md`](../../../documentation/architecture/aws-deployment-and-teardown.md).

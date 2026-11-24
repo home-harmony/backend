@@ -93,6 +93,10 @@ pub enum DomainError {
     // ── Generic ──────────────────────────────────────────────────────────────────
     #[error("Invariant violation: {message}")]
     InvariantViolation { message: String },
+
+    // ── Infrastructure / Port I/O ────────────────────────────────────────────────
+    #[error("Internal error: {message}")]
+    Internal { message: String },
 }
 
 impl From<CurrencyCodeError> for DomainError {

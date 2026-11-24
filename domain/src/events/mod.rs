@@ -110,6 +110,17 @@ impl DomainEvent {
             | DomainEvent::MemberRemoved { occurred_at, .. } => *occurred_at,
         }
     }
+
+    /// Returns the Amazon EventBridge `DetailType` identifier for this event.
+    pub fn detail_type(&self) -> &'static str {
+        match self {
+            DomainEvent::FamilyCreated { .. } => "FamilyCreated",
+            DomainEvent::MemberInvited { .. } => "MemberInvited",
+            DomainEvent::MemberJoined { .. } => "MemberJoined",
+            DomainEvent::MemberRoleChanged { .. } => "MemberRoleChanged",
+            DomainEvent::MemberRemoved { .. } => "MemberRemoved",
+        }
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -151,5 +162,71 @@ mod tests {
         let mut empty_name = json;
         empty_name["name"] = serde_json::json!("   ");
         assert!(serde_json::from_value::<DomainEvent>(empty_name).is_err());
+    }
+
+    #[test]
+    fn detail_type_returns_pascal_case_variant_names() {
+        let family_id = FamilyId::new_v4();
+        let member_id = MemberId::new_v4();
+        let user_id = UserId::new_v4();
+        let now = Utc::now();
+
+        let cases = [
+            (
+                DomainEvent::FamilyCreated {
+                    family_id,
+                    name: FamilyName::try_new("Smith").unwrap(),
+                    home_currency: CurrencyCode::try_new("USD").unwrap(),
+                    occurred_at: now,
+                },
+                "FamilyCreated",
+            ),
+            (
+                DomainEvent::MemberInvited {
+                    family_id,
+                    invite_token: InviteTokenId::new_v4(),
+                    role: Role::Member,
+                    permissions: vec![],
+                    created_by: member_id,
+                    occurred_at: now,
+                },
+                "MemberInvited",
+            ),
+            (
+                DomainEvent::MemberJoined {
+                    family_id,
+                    member_id,
+                    user_id,
+                    role: Role::Member,
+                    occurred_at: now,
+                },
+                "MemberJoined",
+            ),
+            (
+                DomainEvent::MemberRoleChanged {
+                    family_id,
+                    member_id,
+                    old_role: Role::Member,
+                    new_role: Role::Child,
+                    permissions: vec![],
+                    changed_by: member_id,
+                    occurred_at: now,
+                },
+                "MemberRoleChanged",
+            ),
+            (
+                DomainEvent::MemberRemoved {
+                    family_id,
+                    member_id,
+                    removed_by: member_id,
+                    occurred_at: now,
+                },
+                "MemberRemoved",
+            ),
+        ];
+
+        for (event, expected) in cases {
+            assert_eq!(event.detail_type(), expected);
+        }
     }
 }

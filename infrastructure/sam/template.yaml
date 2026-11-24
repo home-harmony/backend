@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 
-Description: "FamilyLedger — Core serverless infrastructure (Cognito, API Gateway, S3, CloudFront)"
+Description: "FamilyLedger — Core serverless infrastructure (Cognito, S3, CloudFront)"
 
 Parameters:
   Environment:
@@ -19,16 +19,6 @@ Parameters:
     Type: String
     Default: http://localhost:4200/auth/logout
     Description: URL that Cognito redirects to after logout.
-
-Globals:
-  Function:
-    Runtime: provided.al2023
-    Architectures: [arm64]
-    Timeout: 30
-    MemorySize: 256
-    Environment:
-      Variables:
-        ENVIRONMENT: !Ref Environment
 
 Resources:
   # ─── Cognito User Pool ───────────────────────────────────────────────────────
@@ -82,28 +72,6 @@ Resources:
     Properties:
       Domain: !Sub "familyledger-${Environment}-${AWS::AccountId}"
       UserPoolId: !Ref FamilyLedgerUserPool
-
-  # ─── API Gateway HTTP API ───────────────────────────────────────────────────
-  FamilyLedgerApi:
-    Type: AWS::Serverless::HttpApi
-    Properties:
-      StageName: !Ref Environment
-      CorsConfiguration:
-        AllowOrigins:
-          - "http://localhost:4200"
-          - !Sub "https://${FamilyLedgerCdn.DomainName}"
-        AllowHeaders: [Content-Type, Authorization, X-Amz-Date, X-Api-Key, X-Family-Id]
-        AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
-        MaxAge: 300
-      Auth:
-        DefaultAuthorizer: CognitoJwtAuthorizer
-        Authorizers:
-          CognitoJwtAuthorizer:
-            IdentitySource: "$request.header.Authorization"
-            JwtConfiguration:
-              Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${FamilyLedgerUserPool}"
-              Audience:
-                - !Ref FamilyLedgerWebAppClient
 
   # ─── S3 Bucket for Angular SPA ──────────────────────────────────────────────
   FamilyLedgerSpaBucket:
@@ -191,10 +159,6 @@ Outputs:
     Value: !Ref FamilyLedgerWebAppClient
     Export:
       Name: !Sub "${AWS::StackName}-CognitoWebClientId"
-  ApiGatewayUrl:
-    Value: !Sub "https://${FamilyLedgerApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
-    Export:
-      Name: !Sub "${AWS::StackName}-ApiUrl"
   CloudFrontUrl:
     Value: !Sub "https://${FamilyLedgerCdn.DomainName}"
     Export:

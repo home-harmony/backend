@@ -4,14 +4,20 @@
 //! `code` identifiers so frontends can map `error.code` to localized copy.
 
 use axum::{
+    extract::{FromRequest, Request},
     http::{StatusCode, header},
     response::{IntoResponse, Json, Response},
 };
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 
 use domain::errors::DomainError;
 
 const PROBLEM_JSON_CONTENT_TYPE: &str = "application/problem+json";
+const INTERNAL_ERROR_DETAIL: &str = "An internal server error occurred";
+
+/// JSON extractor returning RFC 9457 `400 Bad Request` (`INVALID_JSON`) on parse failure.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ApiJson<T>(pub T);
 
 /// RFC 9457 Problem Details payload returned by all API error responses.
 #[derive(Debug, Clone, Serialize)]
@@ -45,6 +51,25 @@ impl ApiError {
     }
 }
 
+impl<S, T> FromRequest<S> for ApiJson<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        match axum::Json::<T>::from_request(req, state).await {
+            Ok(axum::Json(value)) => Ok(Self(value)),
+            Err(rejection) => Err(ApiError::problem(
+                StatusCode::BAD_REQUEST,
+                "INVALID_JSON",
+                rejection.body_text(),
+            )),
+        }
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -59,52 +84,64 @@ impl IntoResponse for ApiError {
 
 /// Maps every [`DomainError`] variant exhaustively to an RFC 9457 HTTP response.
 pub fn domain_error_response(err: DomainError) -> Response {
+    if matches!(err, DomainError::Internal { .. }) {
+        tracing::error!(error = %err, "Internal domain/port error");
+        return ApiError::problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            INTERNAL_ERROR_DETAIL,
+        )
+        .into_response();
+    }
     let (status, code) = domain_error_status_and_code(&err);
     ApiError::problem(status, code, err.to_string()).into_response()
 }
 
 fn domain_error_status_and_code(err: &DomainError) -> (StatusCode, &'static str) {
+    use DomainError as E;
     match err {
-        DomainError::InsufficientRole { .. } => (StatusCode::FORBIDDEN, "INSUFFICIENT_ROLE"),
-        DomainError::UserNotInFamily { .. } => (StatusCode::FORBIDDEN, "USER_NOT_IN_FAMILY"),
-        DomainError::FamilyNotFound { .. } => (StatusCode::NOT_FOUND, "FAMILY_NOT_FOUND"),
-        DomainError::MemberNotFound { .. } => (StatusCode::NOT_FOUND, "MEMBER_NOT_FOUND"),
-        DomainError::InviteTokenNotFound => (StatusCode::NOT_FOUND, "INVITE_TOKEN_NOT_FOUND"),
-        DomainError::FamilyDeleted => (StatusCode::GONE, "FAMILY_DELETED"),
-        DomainError::TokenExpired => (StatusCode::GONE, "TOKEN_EXPIRED"),
-        DomainError::TokenAlreadyUsed => (StatusCode::CONFLICT, "TOKEN_ALREADY_USED"),
-        DomainError::MemberAlreadyExists { .. } => (StatusCode::CONFLICT, "MEMBER_ALREADY_EXISTS"),
-        DomainError::DuplicateOwner => (StatusCode::CONFLICT, "DUPLICATE_OWNER"),
-        DomainError::CannotRemoveOwner => (StatusCode::CONFLICT, "CANNOT_REMOVE_OWNER"),
-        DomainError::CurrencyMismatch { .. } => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "CURRENCY_MISMATCH")
-        }
-        DomainError::NegativeAmount { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "NEGATIVE_AMOUNT"),
-        DomainError::ArithmeticOverflow { .. } => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "ARITHMETIC_OVERFLOW")
-        }
-        DomainError::InvalidCurrencyCode { .. } => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_CURRENCY_CODE")
-        }
-        DomainError::InvalidFamilyName { .. } => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_FAMILY_NAME")
-        }
-        DomainError::InvalidDisplayName { .. } => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_DISPLAY_NAME")
-        }
-        DomainError::InvalidEmail { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_EMAIL"),
-        DomainError::InvalidRelationship { .. } => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_RELATIONSHIP")
-        }
-        DomainError::InvalidInviteTtl { .. } => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_INVITE_TTL")
-        }
-        DomainError::InvalidPaymentSplit { .. } => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_PAYMENT_SPLIT")
-        }
-        DomainError::InvariantViolation { .. } => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "INVARIANT_VIOLATION")
-        }
+        E::InsufficientRole { .. } => (StatusCode::FORBIDDEN, "INSUFFICIENT_ROLE"),
+        E::UserNotInFamily { .. } => (StatusCode::FORBIDDEN, "USER_NOT_IN_FAMILY"),
+        E::FamilyNotFound { .. } => (StatusCode::NOT_FOUND, "FAMILY_NOT_FOUND"),
+        E::MemberNotFound { .. } => (StatusCode::NOT_FOUND, "MEMBER_NOT_FOUND"),
+        E::InviteTokenNotFound => (StatusCode::NOT_FOUND, "INVITE_TOKEN_NOT_FOUND"),
+        E::FamilyDeleted => (StatusCode::GONE, "FAMILY_DELETED"),
+        E::TokenExpired => (StatusCode::GONE, "TOKEN_EXPIRED"),
+        E::TokenAlreadyUsed => (StatusCode::CONFLICT, "TOKEN_ALREADY_USED"),
+        E::MemberAlreadyExists { .. } => (StatusCode::CONFLICT, "MEMBER_ALREADY_EXISTS"),
+        E::DuplicateOwner => (StatusCode::CONFLICT, "DUPLICATE_OWNER"),
+        E::CannotRemoveOwner => (StatusCode::CONFLICT, "CANNOT_REMOVE_OWNER"),
+        E::Internal { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
+        _ => (StatusCode::UNPROCESSABLE_ENTITY, validation_error_code(err)),
+    }
+}
+
+fn validation_error_code(err: &DomainError) -> &'static str {
+    use DomainError as E;
+    match err {
+        E::CurrencyMismatch { .. } => "CURRENCY_MISMATCH",
+        E::NegativeAmount { .. } => "NEGATIVE_AMOUNT",
+        E::ArithmeticOverflow { .. } => "ARITHMETIC_OVERFLOW",
+        E::InvalidCurrencyCode { .. } => "INVALID_CURRENCY_CODE",
+        E::InvalidFamilyName { .. } => "INVALID_FAMILY_NAME",
+        E::InvalidDisplayName { .. } => "INVALID_DISPLAY_NAME",
+        E::InvalidEmail { .. } => "INVALID_EMAIL",
+        E::InvalidRelationship { .. } => "INVALID_RELATIONSHIP",
+        E::InvalidInviteTtl { .. } => "INVALID_INVITE_TTL",
+        E::InvalidPaymentSplit { .. } => "INVALID_PAYMENT_SPLIT",
+        E::InvariantViolation { .. } => "INVARIANT_VIOLATION",
+        E::InsufficientRole { .. }
+        | E::UserNotInFamily { .. }
+        | E::FamilyNotFound { .. }
+        | E::MemberNotFound { .. }
+        | E::InviteTokenNotFound
+        | E::FamilyDeleted
+        | E::TokenExpired
+        | E::TokenAlreadyUsed
+        | E::MemberAlreadyExists { .. }
+        | E::DuplicateOwner
+        | E::CannotRemoveOwner
+        | E::Internal { .. } => "INTERNAL_ERROR",
     }
 }
 
@@ -264,5 +301,62 @@ mod tests {
             assert_eq!(content_type.as_deref(), Some("application/problem+json"));
             assert_eq!(json["code"], expected_code);
         }
+    }
+
+    #[tokio::test]
+    async fn internal_domain_error_maps_to_500_without_leaking_raw_message() {
+        let err = DomainError::Internal {
+            message: "secret postgres dsn password=hunter2".to_owned(),
+        };
+        let (status, content_type, json) = read_problem(domain_error_response(err)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(content_type.as_deref(), Some("application/problem+json"));
+        assert_eq!(json["code"], "INTERNAL_ERROR");
+        assert_eq!(json["status"], 500);
+        assert_eq!(json["detail"], "An internal server error occurred");
+        assert!(!json["detail"].as_str().unwrap().contains("hunter2"));
+    }
+
+    #[tokio::test]
+    async fn api_json_rejects_malformed_and_missing_field_payloads_with_400_invalid_json() {
+        use axum::{Router, body::Body, routing::post};
+        use serde::Deserialize;
+        use tower::ServiceExt;
+
+        #[derive(Deserialize)]
+        struct Payload {
+            #[allow(dead_code)]
+            name: String,
+        }
+
+        async fn echo(ApiJson(_body): ApiJson<Payload>) -> StatusCode {
+            StatusCode::OK
+        }
+
+        let app = Router::new().route("/", post(echo));
+
+        let malformed_req = Request::builder()
+            .method("POST")
+            .uri("/")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{not-json"))
+            .unwrap();
+        let malformed_resp = app.clone().oneshot(malformed_req).await.unwrap();
+        let (status, ct, json) = read_problem(malformed_resp).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(ct.as_deref(), Some("application/problem+json"));
+        assert_eq!(json["code"], "INVALID_JSON");
+
+        let missing_field_req = Request::builder()
+            .method("POST")
+            .uri("/")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let missing_resp = app.oneshot(missing_field_req).await.unwrap();
+        let (status2, ct2, json2) = read_problem(missing_resp).await;
+        assert_eq!(status2, StatusCode::BAD_REQUEST);
+        assert_eq!(ct2.as_deref(), Some("application/problem+json"));
+        assert_eq!(json2["code"], "INVALID_JSON");
     }
 }

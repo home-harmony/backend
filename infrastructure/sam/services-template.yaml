@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: "FamilyLedger — API Gateway HTTP API and Rust Lambda Microservices"
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment name
+
+  DsqlClusterIdentifier:
+    Type: String
+    Description: Aurora DSQL Cluster Identifier (e.g. exampleclusterid1234567890)
+
+  CoreStackName:
+    Type: String
+    Default: familyledger-core-dev
+    Description: CloudFormation stack name exporting Cognito and CloudFront outputs
+
+  DataStackName:
+    Type: String
+    Default: familyledger-data-dev
+    Description: CloudFormation stack name exporting EventBridge and IAM service role outputs
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Architectures: [arm64]
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        RUST_LOG: info
+
+Resources:
+  # ─── API Gateway HTTP API ───────────────────────────────────────────────────
+  FamilyLedgerApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      CorsConfiguration:
+        AllowOrigins:
+          - "http://localhost:4200"
+          - Fn::ImportValue: !Sub "${CoreStackName}-CloudFrontUrl"
+        AllowHeaders: [Content-Type, Authorization, X-Amz-Date, X-Api-Key, X-Family-Id]
+        AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+        MaxAge: 300
+      Auth:
+        DefaultAuthorizer: CognitoJwtAuthorizer
+        Authorizers:
+          CognitoJwtAuthorizer:
+            IdentitySource: "$request.header.Authorization"
+            JwtConfiguration:
+              Issuer:
+                Fn::Sub:
+                  - "https://cognito-idp.${AWS::Region}.amazonaws.com/${PoolId}"
+                  - PoolId:
+                      Fn::ImportValue: !Sub "${CoreStackName}-CognitoUserPoolId"
+              Audience:
+                - Fn::ImportValue: !Sub "${CoreStackName}-CognitoWebClientId"
+
+  # ─── Identity & Family Microservice Lambda ──────────────────────────────────
+  FamilyLedgerFamilyServiceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "familyledger-family-service-${Environment}"
+      Description: "Identity & Family bounded context API (workspaces, members, invites, RBAC)"
+      CodeUri: ../../target/lambda/family_service/
+      Handler: bootstrap
+      Role:
+        Fn::ImportValue: !Sub "${DataStackName}-ServiceRoleArn"
+      Environment:
+        Variables:
+          DSQL_ENDPOINT: !Sub "${DsqlClusterIdentifier}.dsql.${AWS::Region}.on.aws"
+          DSQL_USER: familyledger_app
+          EVENT_BUS_NAME:
+            Fn::ImportValue: !Sub "${DataStackName}-EventBusName"
+      Events:
+        GetProfileFamilies:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FamilyLedgerApi
+            Path: /profile/families
+            Method: GET
+        CreateFamily:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FamilyLedgerApi
+            Path: /families
+            Method: POST
+        GetFamily:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FamilyLedgerApi
+            Path: /families/{id}
+            Method: GET
+        UpdateFamily:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FamilyLedgerApi
+            Path: /families/{id}
+            Method: PUT
+        CreateInvite:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FamilyLedgerApi
+            Path: /families/{id}/invites
+            Method: POST
+        AcceptInvite:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FamilyLedgerApi
+            Path: /families/{id}/members
+            Method: POST
+        ListMembers:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FamilyLedgerApi
+            Path: /families/{id}/members
+            Method: GET
+        ChangeMemberRole:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FamilyLedgerApi
+            Path: /families/{id}/members/{mid}/role
+            Method: PATCH
+        RemoveMember:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FamilyLedgerApi
+            Path: /families/{id}/members/{mid}
+            Method: DELETE
+
+Outputs:
+  ApiGatewayUrl:
+    Value: !Sub "https://${FamilyLedgerApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiUrl"
+  FamilyServiceFunctionName:
+    Value: !Ref FamilyLedgerFamilyServiceFunction
+  FamilyServiceFunctionArn:
+    Value: !GetAtt FamilyLedgerFamilyServiceFunction.Arn

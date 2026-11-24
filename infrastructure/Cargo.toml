@@ -6,6 +6,12 @@ license.workspace = true
 description = "FamilyLedger — database repositories, external service adapters, and I/O wrappers."
 
 [dependencies]
+domain = { path = "../domain" }
+
+# ── AWS SDK ────────────────────────────────────────────────────────────────────
+aws-config = { workspace = true }
+aws-sdk-eventbridge = { workspace = true }
+
 # ── Database ───────────────────────────────────────────────────────────────────
 sqlx = { workspace = true }
 aurora-dsql-sqlx-connector = { workspace = true }
