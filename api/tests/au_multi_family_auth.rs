@@ -71,16 +71,6 @@ struct FakeMembershipReader {
     memberships: BTreeMap<(FamilyId, UserId), MemberAccess>,
 }
 
-impl MembershipReader for FakeMembershipReader {
-    async fn find_active_membership(
-        &self,
-        family_id: FamilyId,
-        user_id: UserId,
-    ) -> Result<Option<MemberAccess>, DomainError> {
-        Ok(self.memberships.get(&(family_id, user_id)).cloned())
-    }
-}
-
 const ALL_EIGHT_PERMS: &[Permission] = &[
     Permission::RecordOwnTransactions,
     Permission::RecordAnyTransaction,
@@ -266,6 +256,16 @@ const AUTH_RULE_TABLE: &[AuthRuleCase] = &[
     },
 ];
 
+impl MembershipReader for FakeMembershipReader {
+    async fn find_active_membership(
+        &self,
+        family_id: FamilyId,
+        user_id: UserId,
+    ) -> Result<Option<MemberAccess>, DomainError> {
+        Ok(self.memberships.get(&(family_id, user_id)).cloned())
+    }
+}
+
 #[tokio::test]
 async fn au_auth_rule_table_conforms() {
     for case in AUTH_RULE_TABLE {
@@ -275,33 +275,16 @@ async fn au_auth_rule_table_conforms() {
 
 #[tokio::test]
 async fn au_06_multi_family_caller_switches_workspace_cleanly_via_header() {
-    let user_id = UserId::new_v4();
-    let family_a = FamilyId::new_v4();
-    let family_b = FamilyId::new_v4();
-    let mut reader = FakeMembershipReader::default();
-    reader.memberships.insert(
-        (family_a, user_id),
-        MemberAccess {
-            role: Role::Owner,
-            permissions: Vec::new(),
-        },
-    );
-    reader.memberships.insert(
-        (family_b, user_id),
-        MemberAccess {
-            role: Role::Child,
-            permissions: Vec::new(),
-        },
-    );
-    let app = build_test_router(Arc::new(reader));
+    let (user_id, family_a, family_b, app) = multi_family_test_app();
+    let identity = Some(UserIdentity {
+        user_id,
+        email: None,
+    });
 
     let req_a = build_request(
         RouteTarget::CreateInvite(TargetFamily::FamilyA),
         HeaderSpec::FamilyA,
-        Some(UserIdentity {
-            user_id,
-            email: None,
-        }),
+        identity.clone(),
         family_a,
         family_b,
     )
@@ -312,10 +295,7 @@ async fn au_06_multi_family_caller_switches_workspace_cleanly_via_header() {
     let req_b = build_request(
         RouteTarget::CreateInvite(TargetFamily::FamilyB),
         HeaderSpec::FamilyB,
-        Some(UserIdentity {
-            user_id,
-            email: None,
-        }),
+        identity,
         family_a,
         family_b,
     )
@@ -327,9 +307,8 @@ async fn au_06_multi_family_caller_switches_workspace_cleanly_via_header() {
 }
 
 async fn run_auth_case(case: &AuthRuleCase) -> Result<(), String> {
-    let user_id = UserId::new_v4();
-    let family_a = FamilyId::new_v4();
-    let family_b = FamilyId::new_v4();
+    let (user_id, family_a, family_b) =
+        (UserId::new_v4(), FamilyId::new_v4(), FamilyId::new_v4());
     let mut reader = FakeMembershipReader::default();
     if let Some((target, role)) = case.membership {
         let fam = resolve_family(target, family_a, family_b);
@@ -346,25 +325,39 @@ async fn run_auth_case(case: &AuthRuleCase) -> Result<(), String> {
         user_id,
         email: None,
     });
-    let app = build_test_router(Arc::new(reader));
     let req = build_request(case.route, case.header, identity, family_a, family_b)?;
-    let Ok(resp) = app.oneshot(req).await;
+    let Ok(resp) = build_test_router(Arc::new(reader)).oneshot(req).await;
 
     match case.expected {
+        ExpectedHttp::Status(status) if resp.status() == status => Ok(()),
         ExpectedHttp::Status(status) => {
-            if resp.status() != status {
-                return Err(format!(
-                    "{}: expected {status}, got {}",
-                    case.id,
-                    resp.status()
-                ));
-            }
-            Ok(())
+            Err(format!("{}: expected {status}, got {}", case.id, resp.status()))
         }
         ExpectedHttp::Problem(status, code) => {
             assert_problem_response(resp, status, code, case.id).await
         }
     }
+}
+
+fn multi_family_test_app() -> (UserId, FamilyId, FamilyId, Router) {
+    let (user_id, family_a, family_b) =
+        (UserId::new_v4(), FamilyId::new_v4(), FamilyId::new_v4());
+    let mut reader = FakeMembershipReader::default();
+    reader.memberships.insert(
+        (family_a, user_id),
+        MemberAccess {
+            role: Role::Owner,
+            permissions: Vec::new(),
+        },
+    );
+    reader.memberships.insert(
+        (family_b, user_id),
+        MemberAccess {
+            role: Role::Child,
+            permissions: Vec::new(),
+        },
+    );
+    (user_id, family_a, family_b, build_test_router(Arc::new(reader)))
 }
 
 fn build_test_router(reader: Arc<FakeMembershipReader>) -> Router {
@@ -440,41 +433,31 @@ fn route_method_and_uri(
     family_a: FamilyId,
     family_b: FamilyId,
 ) -> (Method, String) {
-    let member_id = uuid::Uuid::new_v4();
+    let Some((target, method, suffix)) = family_route_parts(route, uuid::Uuid::new_v4()) else {
+        return match route {
+            RouteTarget::CreateFamily => (Method::POST, "/families".to_owned()),
+            _ => (Method::GET, "/profile/families".to_owned()),
+        };
+    };
+    let family_id = resolve_family(target, family_a, family_b);
+    (method, format!("/families/{family_id}{suffix}"))
+}
+
+fn family_route_parts(
+    route: RouteTarget,
+    member_id: uuid::Uuid,
+) -> Option<(TargetFamily, Method, String)> {
     match route {
-        RouteTarget::ProfileFamilies => (Method::GET, "/profile/families".to_owned()),
-        RouteTarget::CreateFamily => (Method::POST, "/families".to_owned()),
-        RouteTarget::AcceptInvite(t) => {
-            let f = resolve_family(t, family_a, family_b);
-            (Method::POST, format!("/families/{f}/members"))
-        }
-        RouteTarget::GetFamily(t) => {
-            let f = resolve_family(t, family_a, family_b);
-            (Method::GET, format!("/families/{f}"))
-        }
-        RouteTarget::GetMembers(t) => {
-            let f = resolve_family(t, family_a, family_b);
-            (Method::GET, format!("/families/{f}/members"))
-        }
-        RouteTarget::UpdateFamily(t) => {
-            let f = resolve_family(t, family_a, family_b);
-            (Method::PUT, format!("/families/{f}"))
-        }
-        RouteTarget::CreateInvite(t) => {
-            let f = resolve_family(t, family_a, family_b);
-            (Method::POST, format!("/families/{f}/invites"))
-        }
+        RouteTarget::ProfileFamilies | RouteTarget::CreateFamily => None,
+        RouteTarget::AcceptInvite(t) => Some((t, Method::POST, "/members".to_owned())),
+        RouteTarget::GetFamily(t) => Some((t, Method::GET, String::new())),
+        RouteTarget::GetMembers(t) => Some((t, Method::GET, "/members".to_owned())),
+        RouteTarget::UpdateFamily(t) => Some((t, Method::PUT, String::new())),
+        RouteTarget::CreateInvite(t) => Some((t, Method::POST, "/invites".to_owned())),
         RouteTarget::ChangeMemberRole(t) => {
-            let f = resolve_family(t, family_a, family_b);
-            (
-                Method::PATCH,
-                format!("/families/{f}/members/{member_id}/role"),
-            )
+            Some((t, Method::PATCH, format!("/members/{member_id}/role")))
         }
-        RouteTarget::RemoveMember(t) => {
-            let f = resolve_family(t, family_a, family_b);
-            (Method::DELETE, format!("/families/{f}/members/{member_id}"))
-        }
+        RouteTarget::RemoveMember(t) => Some((t, Method::DELETE, format!("/members/{member_id}"))),
     }
 }
 

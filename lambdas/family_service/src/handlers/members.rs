@@ -12,7 +12,7 @@ use api::{
 };
 use domain::{
     errors::DomainError,
-    ports::{EventPublisher, FamilyRepository},
+    ports::{EventPublisher, FamilyRepository, TokenScope},
     value_objects::{DisplayName, FamilyId, InviteTtl, MemberId, Relationship},
 };
 
@@ -79,7 +79,7 @@ pub async fn get_family_members<R, P>(
 ) -> Response
 where
     R: FamilyRepository + Send + Sync + 'static,
-    P: EventPublisher + Send + Sync + 'static,
+    P: Send + Sync + 'static,
 {
     if let Err(err) = parse_and_verify_path_family_id(&raw_id, claims.family_id) {
         return err.into_response();
@@ -144,13 +144,26 @@ where
 {
     let relationship = req.relationship.map(Relationship::try_new).transpose()?;
     let ttl = InviteTtl::from_hours(req.ttl_hours.unwrap_or(DEFAULT_INVITE_TTL_HOURS))?;
+    let user_id = claims.user_id;
+    let role = req.role;
+    let permissions = req.permissions;
 
-    let mut family = load_family_or_not_found(&*state.repo, claims.family_id).await?;
-    let (invite, events) =
-        family.create_invite(claims.user_id, req.role, req.permissions, relationship, ttl)?;
-    state.repo.save(&family).await?;
-    publish_best_effort(&*state.publisher, &events).await;
-    Ok(InviteResponse::from(&invite))
+    let updated = state
+        .repo
+        .update(claims.family_id, TokenScope::None, move |family| {
+            // Cloned per attempt because OCC retries may re-execute this closure.
+            let (invite, events) = family.create_invite(
+                user_id,
+                role,
+                permissions.clone(),
+                relationship.clone(),
+                ttl,
+            )?;
+            Ok((InviteResponse::from(&invite), events))
+        })
+        .await?;
+    publish_best_effort(&*state.publisher, &updated.events).await;
+    Ok(updated.value)
 }
 
 async fn accept_invite_workflow<R, P>(
@@ -164,11 +177,18 @@ where
     P: EventPublisher,
 {
     let display_name = DisplayName::try_new(req.display_name)?;
-    let mut family = load_family_or_not_found(&*state.repo, family_id).await?;
-    let (member, events) = family.accept_invite(req.token, identity.user_id, display_name)?;
-    state.repo.save(&family).await?;
-    publish_best_effort(&*state.publisher, &events).await;
-    Ok(MemberResponse::from(&member))
+    let user_id = identity.user_id;
+    let token = req.token;
+    let updated = state
+        .repo
+        .update(family_id, TokenScope::One(token), move |family| {
+            // Cloned per attempt because OCC retries may re-execute this closure.
+            let (member, events) = family.accept_invite(token, user_id, display_name.clone())?;
+            Ok((MemberResponse::from(&member), events))
+        })
+        .await?;
+    publish_best_effort(&*state.publisher, &updated.events).await;
+    Ok(updated.value)
 }
 
 async fn list_members_workflow<R: FamilyRepository>(
@@ -193,17 +213,24 @@ where
     R: FamilyRepository,
     P: EventPublisher,
 {
-    let mut family = load_family_or_not_found(&*state.repo, claims.family_id).await?;
-    let events = family.change_member_role(claims.user_id, member_id, req.role, req.permissions)?;
-    if !events.is_empty() {
-        state.repo.save(&family).await?;
-        publish_best_effort(&*state.publisher, &events).await;
-    }
-    let updated = family
-        .active_members()
-        .find(|m| m.id() == member_id)
-        .ok_or(DomainError::MemberNotFound { member_id })?;
-    Ok(MemberResponse::from(updated))
+    let user_id = claims.user_id;
+    let role = req.role;
+    let permissions = req.permissions;
+    let updated = state
+        .repo
+        .update(claims.family_id, TokenScope::None, move |family| {
+            // Cloned per attempt because OCC retries may re-execute this closure.
+            let events =
+                family.change_member_role(user_id, member_id, role, permissions.clone())?;
+            let member = family
+                .active_members()
+                .find(|m| m.id() == member_id)
+                .ok_or(DomainError::MemberNotFound { member_id })?;
+            Ok((MemberResponse::from(member), events))
+        })
+        .await?;
+    publish_best_effort(&*state.publisher, &updated.events).await;
+    Ok(updated.value)
 }
 
 async fn remove_member_workflow<R, P>(
@@ -215,9 +242,14 @@ where
     R: FamilyRepository,
     P: EventPublisher,
 {
-    let mut family = load_family_or_not_found(&*state.repo, claims.family_id).await?;
-    let events = family.remove_member(claims.user_id, member_id)?;
-    state.repo.save(&family).await?;
-    publish_best_effort(&*state.publisher, &events).await;
+    let user_id = claims.user_id;
+    let updated = state
+        .repo
+        .update(claims.family_id, TokenScope::None, move |family| {
+            let events = family.remove_member(user_id, member_id)?;
+            Ok(((), events))
+        })
+        .await?;
+    publish_best_effort(&*state.publisher, &updated.events).await;
     Ok(())
 }

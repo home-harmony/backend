@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT token, family_id, role, permissions, relationship, created_by, created_at, expires_at, used FROM family_invite_tokens WHERE family_id = $1 ORDER BY created_at ASC, token ASC",
+  "query": "SELECT token, family_id, role, permissions, relationship, created_by, created_at, expires_at, used FROM family_invite_tokens WHERE family_id = $1 AND token = $2",
   "describe": {
     "columns": [
       {
@@ -105,6 +105,7 @@
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -120,5 +121,5 @@
       false
     ]
   },
-  "hash": "460a947b5b3fe3722b91ca0432ec1b40d6c0d84cad79ab6bf2f2810485fb7ef8"
+  "hash": "749e8ff8de184f4ef3975b73a1694fc55f6ba94cbceb76a600782d570af366f2"
 }

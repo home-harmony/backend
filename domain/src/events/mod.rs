@@ -14,7 +14,7 @@ use crate::value_objects::{
 };
 
 /// All domain events emitted across all bounded contexts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
 pub enum DomainEvent {
     // ── Sprint 1: Identity & Family context ─────────────────────────────────────
@@ -166,18 +166,41 @@ mod tests {
 
     #[test]
     fn detail_type_returns_pascal_case_variant_names() {
+        for (event, expected) in sample_events_with_detail_types() {
+            assert_eq!(event.detail_type(), expected);
+        }
+    }
+
+    fn sample_events_with_detail_types() -> Vec<(DomainEvent, &'static str)> {
         let family_id = FamilyId::new_v4();
         let member_id = MemberId::new_v4();
-        let user_id = UserId::new_v4();
-        let now = Utc::now();
+        let occurred_at = Utc::now();
+        let mut events = sample_family_events(family_id, member_id, occurred_at);
+        events.extend(sample_member_events(family_id, member_id, occurred_at));
+        events.push((
+            DomainEvent::MemberRemoved {
+                family_id,
+                member_id,
+                removed_by: member_id,
+                occurred_at,
+            },
+            "MemberRemoved",
+        ));
+        events
+    }
 
-        let cases = [
+    fn sample_family_events(
+        family_id: FamilyId,
+        member_id: MemberId,
+        occurred_at: DateTime<Utc>,
+    ) -> Vec<(DomainEvent, &'static str)> {
+        vec![
             (
                 DomainEvent::FamilyCreated {
                     family_id,
                     name: FamilyName::try_new("Smith").unwrap(),
                     home_currency: CurrencyCode::try_new("USD").unwrap(),
-                    occurred_at: now,
+                    occurred_at,
                 },
                 "FamilyCreated",
             ),
@@ -188,17 +211,26 @@ mod tests {
                     role: Role::Member,
                     permissions: vec![],
                     created_by: member_id,
-                    occurred_at: now,
+                    occurred_at,
                 },
                 "MemberInvited",
             ),
+        ]
+    }
+
+    fn sample_member_events(
+        family_id: FamilyId,
+        member_id: MemberId,
+        occurred_at: DateTime<Utc>,
+    ) -> Vec<(DomainEvent, &'static str)> {
+        vec![
             (
                 DomainEvent::MemberJoined {
                     family_id,
                     member_id,
-                    user_id,
+                    user_id: UserId::new_v4(),
                     role: Role::Member,
-                    occurred_at: now,
+                    occurred_at,
                 },
                 "MemberJoined",
             ),
@@ -210,23 +242,10 @@ mod tests {
                     new_role: Role::Child,
                     permissions: vec![],
                     changed_by: member_id,
-                    occurred_at: now,
+                    occurred_at,
                 },
                 "MemberRoleChanged",
             ),
-            (
-                DomainEvent::MemberRemoved {
-                    family_id,
-                    member_id,
-                    removed_by: member_id,
-                    occurred_at: now,
-                },
-                "MemberRemoved",
-            ),
-        ];
-
-        for (event, expected) in cases {
-            assert_eq!(event.detail_type(), expected);
-        }
+        ]
     }
 }

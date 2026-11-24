@@ -72,6 +72,12 @@ sam validate -t services-template.yaml --lint
 sam deploy --template-file services-template.yaml --config-file samconfig-services.toml --no-confirm-changeset
 ```
 
+> [!NOTE]
+> **Services stack parameters**: `DsqlUser` (default `familyledger_app`; the `AllowedPattern` rejects `admin`) sets the Lambda's `DSQL_USER`. The `http://localhost:4200` CORS origin is added **only when `Environment=dev`** (`IsDev` condition); `staging`/`prod` allow only the CloudFront origin. Core `template.yaml` keeps its localhost Cognito callback by design.
+
+> [!WARNING]
+> **Scrub before publishing**: `samconfig-data.toml` and `samconfig-services.toml` contain the dev DSQL cluster ID (matching the Sprint 1 convention for this private repo). Replace it with a placeholder before making the repository public.
+
 ---
 
 ## 4. AWS Deployment & Teardown Runbooks

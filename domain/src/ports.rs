@@ -6,7 +6,7 @@ use crate::entities::Family;
 use crate::errors::DomainError;
 use crate::events::DomainEvent;
 use crate::value_objects::{
-    CurrencyCode, DisplayName, FamilyId, FamilyName, Permission, Role, UserId,
+    CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, Permission, Role, UserId,
 };
 
 /// Resolved active membership permissions for an authenticated caller in a family.
@@ -36,10 +36,26 @@ pub trait MembershipReader: Send + Sync {
     ) -> impl Future<Output = Result<Option<MemberAccess>, DomainError>> + Send;
 }
 
+/// Which invite tokens an atomic [`FamilyRepository::update`] loads into the aggregate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenScope {
+    /// No invite tokens are loaded (newly created tokens are still persisted).
+    None,
+    /// Only the given token (scoped to the family) is loaded, if it exists.
+    One(InviteTokenId),
+}
+
+/// Result of a committed [`FamilyRepository::update`]: the closure's value plus its events.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Updated<T> {
+    pub value: T,
+    pub events: Vec<DomainEvent>,
+}
+
 /// Persistence port for the [`Family`] aggregate root.
 pub trait FamilyRepository: Send + Sync {
-    /// Loads a `Family` aggregate (including `deleted_at`, all active/soft-deleted members,
-    /// and invite tokens) by `family_id`.
+    /// Read-only load of a `Family` aggregate (including `deleted_at` and all
+    /// active/soft-deleted members, but **no invite tokens**) by `family_id`.
     ///
     /// Returns `Ok(None)` only when no `family_families` row exists (`DomainError::FamilyNotFound`),
     /// allowing aggregate methods to surface `DomainError::FamilyDeleted` (`410 Gone`) when
@@ -55,9 +71,28 @@ pub trait FamilyRepository: Send + Sync {
         user_id: UserId,
     ) -> impl Future<Output = Result<Vec<UserFamilySummary>, DomainError>> + Send;
 
-    /// Persists the `Family` aggregate state atomically via idempotent upserts (`INSERT ... ON CONFLICT DO UPDATE`,
-    /// never `DELETE`) wrapped in OCC retries on Aurora DSQL.
-    fn save(&self, family: &Family) -> impl Future<Output = Result<(), DomainError>> + Send;
+    /// Inserts a brand-new aggregate (family, members, tokens) in one transaction.
+    /// Insert-only: never upserts, never overwrites an existing family.
+    fn insert_new(&self, family: &Family) -> impl Future<Output = Result<(), DomainError>> + Send;
+
+    /// Atomic read → mutate → write of one family.
+    ///
+    /// Locks the family, loads it (tokens per `scope`), runs `op`, and persists only the
+    /// rows `op` changed, all inside one transaction. `op` may run more than once (OCC
+    /// retry re-reads and re-runs it), so it must be pure with respect to anything
+    /// outside `&mut Family`. A returned `Err` rolls back and is never retried. Events in
+    /// the result come from the committed attempt only.
+    ///
+    /// Returns `DomainError::FamilyNotFound` when the family row does not exist.
+    fn update<T, F>(
+        &self,
+        family_id: FamilyId,
+        scope: TokenScope,
+        op: F,
+    ) -> impl Future<Output = Result<Updated<T>, DomainError>> + Send
+    where
+        T: Send,
+        F: Fn(&mut Family) -> Result<(T, Vec<DomainEvent>), DomainError> + Send + Sync;
 }
 
 /// Outbound port for publishing committed [`DomainEvent`]s to EventBridge (ADR-0017).

@@ -1,106 +1,27 @@
 //! Layer 2b HTTP integration tests for Slice 3 (`POST /families/{id}/invites`, `POST/GET /families/{id}/members`).
 
-use std::collections::HashMap;
+mod common;
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::{
-    Router,
-    body::{Body, to_bytes},
-    http::{Method, Request, StatusCode, header},
-};
-use chrono::{DateTime, Duration, Utc};
-use lambda_http::{
-    aws_lambda_events::apigw::{
-        ApiGatewayRequestAuthorizer, ApiGatewayRequestAuthorizerJwtDescription,
-        ApiGatewayV2httpRequestContext,
-    },
-    request::RequestContext,
-};
-use serde_json::{Value, json};
-use tokio::sync::Mutex;
-use tower::ServiceExt;
+use axum::http::{Method, StatusCode};
+use chrono::{Duration, Utc};
+use serde_json::json;
 
 use domain::{
-    entities::{Family, FamilyParams},
-    errors::DomainError,
+    entities::Family,
     events::DomainEvent,
-    ports::{FamilyRepository, MemberAccess, MembershipReader, UserFamilySummary},
-    value_objects::{
-        CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, InviteTtl, MemberId,
-        Permission, Relationship, Role, UserId,
-    },
+    value_objects::{FamilyId, InviteTokenId, InviteTtl, Permission, Role, UserId},
 };
 use family_service::{AppState, build_router};
 use infrastructure::events::SpyPublisher;
 
-#[derive(Default)]
-struct InMemoryFamilyRepo {
-    families: Mutex<Vec<Family>>,
-}
-
-struct RoleUsers {
-    owner: UserId,
-    owner_member_id: MemberId,
-    member: UserId,
-    child: UserId,
-    other: UserId,
-    other_all_perms: UserId,
-    removed_member: UserId,
-    removed_member_id: MemberId,
-}
-
-impl InMemoryFamilyRepo {
-    fn with_families(families: Vec<Family>) -> Self {
-        Self {
-            families: Mutex::new(families),
-        }
-    }
-}
-
-impl FamilyRepository for InMemoryFamilyRepo {
-    async fn find_by_id(&self, family_id: FamilyId) -> Result<Option<Family>, DomainError> {
-        Ok(self
-            .families
-            .lock()
-            .await
-            .iter()
-            .find(|f| f.id() == family_id)
-            .cloned())
-    }
-
-    async fn list_for_user(&self, _user_id: UserId) -> Result<Vec<UserFamilySummary>, DomainError> {
-        Ok(Vec::new())
-    }
-
-    async fn save(&self, family: &Family) -> Result<(), DomainError> {
-        let mut guard = self.families.lock().await;
-        if let Some(existing) = guard.iter_mut().find(|f| f.id() == family.id()) {
-            *existing = family.clone();
-        } else {
-            guard.push(family.clone());
-        }
-        Ok(())
-    }
-}
-
-impl MembershipReader for InMemoryFamilyRepo {
-    async fn find_active_membership(
-        &self,
-        family_id: FamilyId,
-        user_id: UserId,
-    ) -> Result<Option<MemberAccess>, DomainError> {
-        let guard = self.families.lock().await;
-        Ok(guard
-            .iter()
-            .find(|f| f.id() == family_id)
-            .and_then(|f| f.active_members().find(|m| m.user_id() == user_id))
-            .map(|m| MemberAccess {
-                role: m.role(),
-                permissions: m.permissions().to_vec(),
-            }))
-    }
-}
+use common::{
+    InMemoryFamilyRepo, assert_problem, build_family_with_all_roles, get_req,
+    mark_family_soft_deleted, parse_ts, post_family_req, post_identity_req, request_with_auth,
+    seed_other_invite, send_json, test_app,
+};
 
 #[tokio::test]
 async fn post_invite_creates_member_invite_with_default_ttl_and_emits_event() -> Result<()> {
@@ -116,7 +37,7 @@ async fn post_invite_creates_member_invite_with_default_ttl_and_emits_event() ->
         &fid,
         r#"{"role":"member"}"#,
     )?;
-    let (status, _, body) = send(app, req).await?;
+    let (status, _, body) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["family_id"], fid);
     assert_eq!(body["role"], "member");
@@ -157,7 +78,7 @@ async fn post_invite_deduplicates_other_permissions_trims_relationship_and_uses_
         &fid,
         &payload,
     )?;
-    let (status, _, body) = send(app, req).await?;
+    let (status, _, body) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["role"], "other");
     assert_eq!(body["permissions"], json!(["view_budget", "view_reports"]));
@@ -290,9 +211,9 @@ async fn post_invite_returns_201_when_eventbridge_publish_fails() -> Result<()> 
         &fid,
         r#"{"role":"child"}"#,
     )?;
-    let (status, _, _) = send(app, req).await?;
+    let (status, _, _) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::CREATED);
-    let saved = repo.find_by_id(family_id).await?.context("family")?;
+    let saved = repo.stored_family(family_id).await.context("family")?;
     assert!(!saved.invite_tokens().is_empty());
     Ok(())
 }
@@ -335,7 +256,7 @@ async fn post_invite_accepts_max_ttl_720_and_rejects_overlong_relationship() -> 
         &fid,
         r#"{"role":"member","ttl_hours":720}"#,
     )?;
-    let (status, _, body) = send(app.clone(), req_ok).await?;
+    let (status, _, body) = send_json(app.clone(), req_ok).await?;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(
         parse_ts(&body["expires_at"])? - parse_ts(&body["created_at"])?,
@@ -419,7 +340,7 @@ async fn post_member_accepts_invite_without_family_header_and_emits_member_joine
         Some(newcomer),
         &payload,
     )?;
-    let (status, _, body) = send(app, req).await?;
+    let (status, _, body) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["family_id"], fid);
     assert_eq!(body["user_id"], newcomer.to_string());
@@ -454,10 +375,10 @@ async fn post_member_marks_token_used_and_returns_201_when_publish_fails() -> Re
         Some(newcomer),
         &payload,
     )?;
-    let (status, _, _) = send(app, req).await?;
+    let (status, _, _) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::CREATED);
 
-    let saved = repo.find_by_id(family_id).await?.context("family")?;
+    let saved = repo.stored_family(family_id).await.context("family")?;
     let used_invite = saved
         .invite_tokens()
         .iter()
@@ -484,7 +405,7 @@ async fn post_member_reactivates_soft_deleted_member_preserving_member_id() -> R
         Some(roles.removed_member),
         &payload,
     )?;
-    let (status, _, body) = send(app, req).await?;
+    let (status, _, body) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["id"], roles.removed_member_id.to_string());
     assert_eq!(body["display_name"], "Back Again");
@@ -593,13 +514,41 @@ async fn post_member_rejects_already_active_member_without_consuming_token() -> 
     let req = post_identity_req(&path, Some(roles.member), &raw)?;
     assert_problem(app, req, StatusCode::CONFLICT, "MEMBER_ALREADY_EXISTS").await?;
 
-    let stored = repo.find_by_id(family_id).await?.context("family")?;
+    let stored = repo.stored_family(family_id).await.context("family")?;
     let still_unused = stored
         .invite_tokens()
         .iter()
         .find(|t| t.token() == fresh_tok)
         .context("fresh token")?;
     assert!(!still_unused.is_used());
+    Ok(())
+}
+
+#[tokio::test]
+async fn post_member_rejects_valid_token_from_another_family() -> Result<()> {
+    let (mut family_a, roles_a) = build_family_with_all_roles()?;
+    let (family_b, _) = build_family_with_all_roles()?;
+    let token_a = seed_other_invite(&mut family_a, roles_a.owner, Permission::ViewBudget, "Aunt")?;
+    let (id_a, id_b) = (family_a.id(), family_b.id());
+    let repo = Arc::new(InMemoryFamilyRepo::with_families(vec![family_a, family_b]));
+    let spy = Arc::new(SpyPublisher::new());
+    let app = build_router(AppState::new(Arc::clone(&repo), Arc::clone(&spy)));
+
+    let newcomer = UserId::new_v4();
+    let payload = json!({"token": token_a, "display_name": "Alex"}).to_string();
+    let bad_req = post_identity_req(&format!("/families/{id_b}/members"), Some(newcomer), &payload)?;
+    assert_problem(
+        app.clone(),
+        bad_req,
+        StatusCode::NOT_FOUND,
+        "INVITE_TOKEN_NOT_FOUND",
+    )
+    .await?;
+    assert!(spy.events().await.is_empty());
+
+    let ok_req = post_identity_req(&format!("/families/{id_a}/members"), Some(newcomer), &payload)?;
+    let (status, _, _) = send_json(app, ok_req).await?;
+    assert_eq!(status, StatusCode::CREATED);
     Ok(())
 }
 
@@ -649,7 +598,7 @@ async fn get_members_lists_only_active_members_for_all_four_active_roles() -> Re
 
     for uid in [roles.owner, roles.member, roles.child, roles.other] {
         let req = get_req(&path, Some(uid), Some(&fid))?;
-        let (status, _, body) = send(app.clone(), req).await?;
+        let (status, _, body) = send_json(app.clone(), req).await?;
         assert_eq!(status, StatusCode::OK);
         let items = body["items"].as_array().context("items array")?;
         assert_eq!(items.len(), 5);
@@ -728,79 +677,6 @@ async fn get_members_rejects_non_member_removed_member_and_deleted_family() -> R
     Ok(())
 }
 
-fn build_family_with_all_roles() -> Result<(Family, RoleUsers)> {
-    let owner = UserId::new_v4();
-    let (mut fam, _) = Family::create(
-        FamilyName::try_new("Household")?,
-        CurrencyCode::try_new("USD")?,
-        owner,
-        DisplayName::try_new("Owner")?,
-    )?;
-    let owner_member_id = fam.members()[0].id();
-    let (removed_member, removed_member_id) = add_removed_member(&mut fam, owner)?;
-    let roles = RoleUsers {
-        owner,
-        owner_member_id,
-        member: add_member(&mut fam, owner, Role::Member, vec![], "Member")?,
-        child: add_member(&mut fam, owner, Role::Child, vec![], "Child")?,
-        other: add_member(&mut fam, owner, Role::Other, vec![], "Other")?,
-        other_all_perms: add_member(
-            &mut fam,
-            owner,
-            Role::Other,
-            Permission::all().to_vec(),
-            "OtherAll",
-        )?,
-        removed_member,
-        removed_member_id,
-    };
-    Ok((fam, roles))
-}
-
-fn add_member(
-    family: &mut Family,
-    owner: UserId,
-    role: Role,
-    permissions: Vec<Permission>,
-    name: &str,
-) -> Result<UserId> {
-    let uid = UserId::new_v4();
-    let (inv, _) =
-        family.create_invite(owner, role, permissions, None, InviteTtl::from_hours(24)?)?;
-    family.accept_invite(inv.token(), uid, DisplayName::try_new(name)?)?;
-    Ok(uid)
-}
-
-fn add_removed_member(family: &mut Family, owner: UserId) -> Result<(UserId, MemberId)> {
-    let uid = UserId::new_v4();
-    let (inv, _) = family.create_invite(
-        owner,
-        Role::Member,
-        vec![],
-        None,
-        InviteTtl::from_hours(24)?,
-    )?;
-    let (joined, _) = family.accept_invite(inv.token(), uid, DisplayName::try_new("Removed")?)?;
-    family.remove_member(owner, joined.id())?;
-    Ok((uid, joined.id()))
-}
-
-fn seed_other_invite(
-    family: &mut Family,
-    owner: UserId,
-    perm: Permission,
-    relationship: &str,
-) -> Result<InviteTokenId> {
-    let (invite, _) = family.create_invite(
-        owner,
-        Role::Other,
-        vec![perm],
-        Some(Relationship::try_new(relationship)?),
-        InviteTtl::from_hours(24)?,
-    )?;
-    Ok(invite.token())
-}
-
 fn seed_token_scenarios(
     family: &mut Family,
     owner: UserId,
@@ -823,123 +699,4 @@ fn seed_token_scenarios(
         InviteTtl::from_hours(24)?,
     )?;
     Ok((used_tok, expired.token(), fresh.token()))
-}
-
-fn mark_family_soft_deleted(family: &Family) -> Family {
-    Family::reconstitute(FamilyParams {
-        id: family.id(),
-        name: family.name().clone(),
-        home_currency: family.home_currency().clone(),
-        members: family.members().to_vec(),
-        invite_tokens: family.invite_tokens().to_vec(),
-        created_at: family.created_at(),
-        deleted_at: Some(Utc::now()),
-    })
-}
-
-fn test_app(repo: InMemoryFamilyRepo, spy: SpyPublisher) -> Router {
-    build_router(AppState::new(Arc::new(repo), Arc::new(spy)))
-}
-
-fn parse_ts(val: &Value) -> Result<DateTime<Utc>> {
-    let raw = val.as_str().context("timestamp must be a JSON string")?;
-    Ok(DateTime::parse_from_rfc3339(raw)?.with_timezone(&Utc))
-}
-
-fn get_req(
-    uri: &str,
-    user_id: Option<UserId>,
-    family_header: Option<&str>,
-) -> Result<Request<Body>> {
-    request_with_auth(Method::GET, uri, user_id, family_header, None)
-}
-
-fn post_family_req(
-    uri: &str,
-    user_id: UserId,
-    family_header: &str,
-    body: &str,
-) -> Result<Request<Body>> {
-    request_with_auth(
-        Method::POST,
-        uri,
-        Some(user_id),
-        Some(family_header),
-        Some(body),
-    )
-}
-
-fn post_identity_req(uri: &str, user_id: Option<UserId>, body: &str) -> Result<Request<Body>> {
-    request_with_auth(Method::POST, uri, user_id, None, Some(body))
-}
-
-fn request_with_auth(
-    method: Method,
-    uri: &str,
-    user_id: Option<UserId>,
-    family_header: Option<&str>,
-    json_body: Option<&str>,
-) -> Result<Request<Body>> {
-    let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(fid) = family_header {
-        builder = builder.header("x-family-id", fid);
-    }
-    let body = match json_body {
-        Some(raw) => {
-            builder = builder.header(header::CONTENT_TYPE, "application/json");
-            Body::from(raw.to_owned())
-        }
-        None => Body::empty(),
-    };
-    let mut req = builder.body(body)?;
-    if let Some(uid) = user_id {
-        req.extensions_mut().insert(v2_jwt_context(uid));
-    }
-    Ok(req)
-}
-
-fn v2_jwt_context(sub: UserId) -> RequestContext {
-    let mut jwt = ApiGatewayRequestAuthorizerJwtDescription::default();
-    jwt.claims = HashMap::from([("sub".to_owned(), sub.to_string())]);
-    let mut authorizer = ApiGatewayRequestAuthorizer::default();
-    authorizer.jwt = Some(jwt);
-    let mut v2 = ApiGatewayV2httpRequestContext::default();
-    v2.authorizer = Some(authorizer);
-    RequestContext::ApiGatewayV2(v2)
-}
-
-async fn assert_problem(
-    app: Router,
-    req: Request<Body>,
-    expected_status: StatusCode,
-    expected_code: &str,
-) -> Result<Value> {
-    let (status, content_type, body) = send(app, req).await?;
-    anyhow::ensure!(
-        status == expected_status,
-        "expected {expected_status}, got {status} (body: {body})"
-    );
-    anyhow::ensure!(
-        content_type.as_deref() == Some("application/problem+json"),
-        "expected application/problem+json, got {content_type:?}"
-    );
-    anyhow::ensure!(
-        body["code"] == expected_code,
-        "expected error code {expected_code}, got {}",
-        body["code"]
-    );
-    Ok(body)
-}
-
-async fn send(app: Router, req: Request<Body>) -> Result<(StatusCode, Option<String>, Value)> {
-    let resp = app.oneshot(req).await?;
-    let status = resp.status();
-    let content_type = resp
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(ToOwned::to_owned);
-    let bytes = to_bytes(resp.into_body(), 64 * 1024).await?;
-    let body = serde_json::from_slice(&bytes)?;
-    Ok((status, content_type, body))
 }

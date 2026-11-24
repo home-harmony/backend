@@ -3,7 +3,10 @@
 use anyhow::{Context, Result, bail};
 use aws_config::BehaviorVersion;
 use aws_sdk_eventbridge::{
-    Client, primitives::DateTime as AwsDateTime, types::PutEventsRequestEntry,
+    Client,
+    operation::put_events::PutEventsOutput,
+    primitives::DateTime as AwsDateTime,
+    types::PutEventsRequestEntry,
 };
 
 use domain::{errors::DomainError, events::DomainEvent, ports::EventPublisher};
@@ -55,15 +58,7 @@ impl EventBridgePublisher {
             .map_err(|err| DomainError::Internal {
                 message: format!("EventBridge PutEvents failed: {err}"),
             })?;
-        if output.failed_entry_count() > 0 {
-            return Err(DomainError::Internal {
-                message: format!(
-                    "EventBridge PutEvents reported {} failed entries",
-                    output.failed_entry_count()
-                ),
-            });
-        }
-        Ok(())
+        check_put_events_output(&output)
     }
 }
 
@@ -77,6 +72,28 @@ impl EventPublisher for EventBridgePublisher {
         }
         Ok(())
     }
+}
+
+fn check_put_events_output(output: &PutEventsOutput) -> Result<(), DomainError> {
+    if output.failed_entry_count() <= 0 {
+        return Ok(());
+    }
+    let failed_details: Vec<String> = output
+        .entries()
+        .iter()
+        .filter_map(|entry| {
+            let code = entry.error_code()?;
+            let msg = entry.error_message().unwrap_or("unknown error");
+            Some(format!("{code}: {msg}"))
+        })
+        .collect();
+    Err(DomainError::Internal {
+        message: format!(
+            "EventBridge PutEvents reported {} failed entries: {}",
+            output.failed_entry_count(),
+            failed_details.join("; ")
+        ),
+    })
 }
 
 fn build_entries_batch(
@@ -111,18 +128,12 @@ fn build_put_events_entry(
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use aws_sdk_eventbridge::types::PutEventsResultEntry;
     use chrono::Utc;
+
     use domain::value_objects::{CurrencyCode, FamilyId, FamilyName, MemberId, Role, UserId};
 
-    fn sample_event() -> DomainEvent {
-        DomainEvent::FamilyCreated {
-            family_id: FamilyId::new_v4(),
-            name: FamilyName::try_new("Smith Family").unwrap(),
-            home_currency: CurrencyCode::try_new("USD").unwrap(),
-            occurred_at: Utc::now(),
-        }
-    }
+    use super::*;
 
     #[test]
     fn build_put_events_entry_populates_required_fields() {
@@ -159,5 +170,36 @@ mod tests {
             .map(|chunk| build_entries_batch("bus", "src", chunk).unwrap().len())
             .collect();
         assert_eq!(batch_sizes, vec![10, 10, 5]);
+    }
+
+    #[test]
+    fn check_put_events_output_includes_failed_entry_details() {
+        let output = PutEventsOutput::builder()
+            .failed_entry_count(1)
+            .entries(
+                PutEventsResultEntry::builder()
+                    .error_code("InternalFailure")
+                    .error_message("throttled")
+                    .build(),
+            )
+            .build();
+
+        let err = check_put_events_output(&output).unwrap_err();
+        match err {
+            DomainError::Internal { message } => {
+                assert!(message.contains("InternalFailure"), "got: {message}");
+                assert!(message.contains("throttled"), "got: {message}");
+            }
+            other => panic!("expected DomainError::Internal, got {other:?}"),
+        }
+    }
+
+    fn sample_event() -> DomainEvent {
+        DomainEvent::FamilyCreated {
+            family_id: FamilyId::new_v4(),
+            name: FamilyName::try_new("Smith Family").unwrap(),
+            home_currency: CurrencyCode::try_new("USD").unwrap(),
+            occurred_at: Utc::now(),
+        }
     }
 }

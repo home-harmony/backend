@@ -13,7 +13,7 @@ use api::{
 use domain::{
     entities::Family,
     errors::DomainError,
-    ports::{EventPublisher, FamilyRepository},
+    ports::{EventPublisher, FamilyRepository, TokenScope},
     value_objects::{CurrencyCode, DisplayName, FamilyId, FamilyName, Role},
 };
 
@@ -49,7 +49,7 @@ pub async fn get_profile_families<R, P>(
 ) -> Response
 where
     R: FamilyRepository + Send + Sync + 'static,
-    P: EventPublisher + Send + Sync + 'static,
+    P: Send + Sync + 'static,
 {
     match state.repo.list_for_user(identity.user_id).await {
         Ok(summaries) => {
@@ -71,7 +71,7 @@ pub async fn get_family<R, P>(
 ) -> Response
 where
     R: FamilyRepository + Send + Sync + 'static,
-    P: EventPublisher + Send + Sync + 'static,
+    P: Send + Sync + 'static,
 {
     if let Err(err) = parse_and_verify_path_family_id(&raw_id, claims.family_id) {
         return err.into_response();
@@ -91,7 +91,7 @@ pub async fn put_family<R, P>(
 ) -> Response
 where
     R: FamilyRepository + Send + Sync + 'static,
-    P: EventPublisher + Send + Sync + 'static,
+    P: Send + Sync + 'static,
 {
     if let Err(err) = parse_and_verify_path_family_id(&raw_id, claims.family_id) {
         return err.into_response();
@@ -117,7 +117,7 @@ where
 
     let (family, events) =
         Family::create(name, home_currency, identity.user_id, owner_display_name)?;
-    state.repo.save(&family).await?;
+    state.repo.insert_new(&family).await?;
     publish_best_effort(&*state.publisher, &events).await;
     build_create_family_response(&family)
 }
@@ -158,8 +158,13 @@ async fn update_family_workflow<R: FamilyRepository>(
 ) -> Result<FamilyResponse, DomainError> {
     let name = FamilyName::try_new(req.name)?;
     let home_currency = CurrencyCode::try_new(req.home_currency)?;
-    let mut family = load_family_or_not_found(repo, claims.family_id).await?;
-    family.update_profile(claims.user_id, name, home_currency)?;
-    repo.save(&family).await?;
-    Ok(FamilyResponse::from(&family))
+    let user_id = claims.user_id;
+    let updated = repo
+        .update(claims.family_id, TokenScope::None, move |family| {
+            // Cloned per attempt because OCC retries may re-execute this closure.
+            family.update_profile(user_id, name.clone(), home_currency.clone())?;
+            Ok((FamilyResponse::from(&*family), Vec::new()))
+        })
+        .await?;
+    Ok(updated.value)
 }

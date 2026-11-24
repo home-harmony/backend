@@ -52,6 +52,8 @@
 | `FM-25` | `Approved` | `human` | Active `Family` where `target_member_id` is absent or soft-deleted | `change_member_role_at` / `remove_member_at` | `Err(DomainError::MemberNotFound { member_id })` |
 | `FM-26` | `Approved` | `human` | Active `Family` with `Owner` caller | `create_invite_at(..., Role::Owner, ...)` or `create_invite_at(..., Role::Member \| Child, non_empty_perms, ...)` | `Err(DomainError::DuplicateOwner)` for `Role::Owner`; `Err(DomainError::InvariantViolation { .. })` for custom permissions on non-`Other` |
 | `FM-27` | `Approved` | `human` | Active vs. soft-deleted `Family` with `Owner` or non-`Owner` caller | `update_profile(requester_user_id, new_name, new_home_currency)` | Updates `name` and `home_currency` for active `Owner`; `Err(DomainError::InsufficientRole { role })` for non-`Owner`; `Err(DomainError::FamilyDeleted)` if deleted |
+| `FM-28` | `Draft` | `human` | Active `Family` with unused unexpired invite token under two concurrent acceptance attempts | Two concurrent `POST /families/{id}/members` (or repository `update`) calls with the same `token` | Exactly one caller joins (`201` / `Ok`) and marks `used = true`; the second receives `409 TOKEN_ALREADY_USED` (`TokenAlreadyUsed`) |
+| `FM-29` | `Draft` | `human` | Active `Family` with concurrent profile update and member removal (`remove_member`) | Concurrent `PUT /families/{id}` and `DELETE /families/{id}/members/{mid}` | Both serialize cleanly without resurrecting the soft-deleted member (`deleted_at` remains set) or reverting the profile update |
 
 ---
 

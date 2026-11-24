@@ -37,7 +37,6 @@ name = "api"
 version = "0.1.0"
 dependencies = [
  "axum",
- "chrono",
  "domain",
  "lambda_http",
  "serde",
@@ -2182,12 +2181,10 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "domain",
- "rust_decimal",
  "serde",
  "serde_json",
  "sqlx",
  "testcontainers-modules",
- "thiserror",
  "tokio",
  "tracing",
  "uuid",

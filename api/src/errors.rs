@@ -99,136 +99,57 @@ pub fn domain_error_response(err: DomainError) -> Response {
 
 fn domain_error_status_and_code(err: &DomainError) -> (StatusCode, &'static str) {
     use DomainError as E;
+    use StatusCode as S;
     match err {
-        E::InsufficientRole { .. } => (StatusCode::FORBIDDEN, "INSUFFICIENT_ROLE"),
-        E::UserNotInFamily { .. } => (StatusCode::FORBIDDEN, "USER_NOT_IN_FAMILY"),
-        E::FamilyNotFound { .. } => (StatusCode::NOT_FOUND, "FAMILY_NOT_FOUND"),
-        E::MemberNotFound { .. } => (StatusCode::NOT_FOUND, "MEMBER_NOT_FOUND"),
-        E::InviteTokenNotFound => (StatusCode::NOT_FOUND, "INVITE_TOKEN_NOT_FOUND"),
-        E::FamilyDeleted => (StatusCode::GONE, "FAMILY_DELETED"),
-        E::TokenExpired => (StatusCode::GONE, "TOKEN_EXPIRED"),
-        E::TokenAlreadyUsed => (StatusCode::CONFLICT, "TOKEN_ALREADY_USED"),
-        E::MemberAlreadyExists { .. } => (StatusCode::CONFLICT, "MEMBER_ALREADY_EXISTS"),
-        E::DuplicateOwner => (StatusCode::CONFLICT, "DUPLICATE_OWNER"),
-        E::CannotRemoveOwner => (StatusCode::CONFLICT, "CANNOT_REMOVE_OWNER"),
-        E::Internal { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
-        _ => (StatusCode::UNPROCESSABLE_ENTITY, validation_error_code(err)),
-    }
-}
-
-fn validation_error_code(err: &DomainError) -> &'static str {
-    use DomainError as E;
-    match err {
-        E::CurrencyMismatch { .. } => "CURRENCY_MISMATCH",
-        E::NegativeAmount { .. } => "NEGATIVE_AMOUNT",
-        E::ArithmeticOverflow { .. } => "ARITHMETIC_OVERFLOW",
-        E::InvalidCurrencyCode { .. } => "INVALID_CURRENCY_CODE",
-        E::InvalidFamilyName { .. } => "INVALID_FAMILY_NAME",
-        E::InvalidDisplayName { .. } => "INVALID_DISPLAY_NAME",
-        E::InvalidEmail { .. } => "INVALID_EMAIL",
-        E::InvalidRelationship { .. } => "INVALID_RELATIONSHIP",
-        E::InvalidInviteTtl { .. } => "INVALID_INVITE_TTL",
-        E::InvalidPaymentSplit { .. } => "INVALID_PAYMENT_SPLIT",
-        E::InvariantViolation { .. } => "INVARIANT_VIOLATION",
-        E::InsufficientRole { .. }
-        | E::UserNotInFamily { .. }
-        | E::FamilyNotFound { .. }
-        | E::MemberNotFound { .. }
-        | E::InviteTokenNotFound
-        | E::FamilyDeleted
-        | E::TokenExpired
-        | E::TokenAlreadyUsed
-        | E::MemberAlreadyExists { .. }
-        | E::DuplicateOwner
-        | E::CannotRemoveOwner
-        | E::Internal { .. } => "INTERNAL_ERROR",
+        E::InsufficientRole { .. } => (S::FORBIDDEN, "INSUFFICIENT_ROLE"),
+        E::UserNotInFamily { .. } => (S::FORBIDDEN, "USER_NOT_IN_FAMILY"),
+        E::FamilyNotFound { .. } => (S::NOT_FOUND, "FAMILY_NOT_FOUND"),
+        E::MemberNotFound { .. } => (S::NOT_FOUND, "MEMBER_NOT_FOUND"),
+        E::InviteTokenNotFound => (S::NOT_FOUND, "INVITE_TOKEN_NOT_FOUND"),
+        E::FamilyDeleted => (S::GONE, "FAMILY_DELETED"),
+        E::TokenExpired => (S::GONE, "TOKEN_EXPIRED"),
+        E::TokenAlreadyUsed => (S::CONFLICT, "TOKEN_ALREADY_USED"),
+        E::MemberAlreadyExists { .. } => (S::CONFLICT, "MEMBER_ALREADY_EXISTS"),
+        E::DuplicateOwner => (S::CONFLICT, "DUPLICATE_OWNER"),
+        E::CannotRemoveOwner => (S::CONFLICT, "CANNOT_REMOVE_OWNER"),
+        E::Internal { .. } => (S::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
+        E::CurrencyMismatch { .. } => (S::UNPROCESSABLE_ENTITY, "CURRENCY_MISMATCH"),
+        E::NegativeAmount { .. } => (S::UNPROCESSABLE_ENTITY, "NEGATIVE_AMOUNT"),
+        E::ArithmeticOverflow { .. } => (S::UNPROCESSABLE_ENTITY, "ARITHMETIC_OVERFLOW"),
+        E::InvalidCurrencyCode { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_CURRENCY_CODE"),
+        E::InvalidFamilyName { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_FAMILY_NAME"),
+        E::InvalidDisplayName { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_DISPLAY_NAME"),
+        E::InvalidEmail { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_EMAIL"),
+        E::InvalidRelationship { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_RELATIONSHIP"),
+        E::InvalidInviteTtl { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_INVITE_TTL"),
+        E::InvalidPaymentSplit { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_PAYMENT_SPLIT"),
+        E::InvariantViolation { .. } => (S::UNPROCESSABLE_ENTITY, "INVARIANT_VIOLATION"),
     }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use axum::body::to_bytes;
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        routing::post,
+    };
     use domain::value_objects::{CurrencyCode, FamilyId, MemberId, Money, Role, UserId};
+    use serde::Deserialize;
+    use tower::ServiceExt;
 
-    async fn read_problem(resp: Response) -> (StatusCode, Option<String>, serde_json::Value) {
-        let status = resp.status();
-        let content_type = resp
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(ToOwned::to_owned);
-        let body = to_bytes(resp.into_body(), 16 * 1024).await.unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        (status, content_type, json)
+    use super::*;
+
+    #[derive(Deserialize)]
+    struct TestPayload {
+        #[allow(dead_code)]
+        name: String,
     }
 
     #[tokio::test]
     async fn domain_errors_map_to_expected_http_statuses_and_codes() {
-        let cases = [
-            (
-                DomainError::InsufficientRole { role: Role::Child },
-                StatusCode::FORBIDDEN,
-                "INSUFFICIENT_ROLE",
-            ),
-            (
-                DomainError::UserNotInFamily {
-                    user_id: UserId::new_v4(),
-                },
-                StatusCode::FORBIDDEN,
-                "USER_NOT_IN_FAMILY",
-            ),
-            (
-                DomainError::FamilyNotFound {
-                    family_id: FamilyId::new_v4(),
-                },
-                StatusCode::NOT_FOUND,
-                "FAMILY_NOT_FOUND",
-            ),
-            (
-                DomainError::MemberNotFound {
-                    member_id: MemberId::new_v4(),
-                },
-                StatusCode::NOT_FOUND,
-                "MEMBER_NOT_FOUND",
-            ),
-            (
-                DomainError::InviteTokenNotFound,
-                StatusCode::NOT_FOUND,
-                "INVITE_TOKEN_NOT_FOUND",
-            ),
-            (
-                DomainError::FamilyDeleted,
-                StatusCode::GONE,
-                "FAMILY_DELETED",
-            ),
-            (DomainError::TokenExpired, StatusCode::GONE, "TOKEN_EXPIRED"),
-            (
-                DomainError::TokenAlreadyUsed,
-                StatusCode::CONFLICT,
-                "TOKEN_ALREADY_USED",
-            ),
-            (
-                DomainError::MemberAlreadyExists {
-                    user_id: UserId::new_v4(),
-                },
-                StatusCode::CONFLICT,
-                "MEMBER_ALREADY_EXISTS",
-            ),
-            (
-                DomainError::DuplicateOwner,
-                StatusCode::CONFLICT,
-                "DUPLICATE_OWNER",
-            ),
-            (
-                DomainError::CannotRemoveOwner,
-                StatusCode::CONFLICT,
-                "CANNOT_REMOVE_OWNER",
-            ),
-        ];
-
-        for (err, expected_status, expected_code) in cases {
+        for (err, expected_status, expected_code) in non_validation_error_cases() {
             let (status, content_type, json) = read_problem(domain_error_response(err)).await;
             assert_eq!(status, expected_status);
             assert_eq!(content_type.as_deref(), Some("application/problem+json"));
@@ -248,54 +169,7 @@ mod tests {
 
     #[tokio::test]
     async fn validation_domain_errors_map_to_distinct_unprocessable_entity_codes() {
-        let usd = CurrencyCode::try_new("USD").unwrap();
-        let eur = CurrencyCode::try_new("EUR").unwrap();
-
-        let cases = [
-            (
-                DomainError::CurrencyMismatch {
-                    expected: usd,
-                    actual: eur,
-                },
-                "CURRENCY_MISMATCH",
-            ),
-            (
-                Money::from_str_parts("-1.00", "USD").unwrap_err(),
-                "NEGATIVE_AMOUNT",
-            ),
-            (
-                DomainError::ArithmeticOverflow {
-                    operation: "money addition",
-                },
-                "ARITHMETIC_OVERFLOW",
-            ),
-            (
-                DomainError::InvalidCurrencyCode {
-                    reason: "must be 3 chars".to_string(),
-                },
-                "INVALID_CURRENCY_CODE",
-            ),
-            (
-                DomainError::InvalidEmail {
-                    reason: "invalid".to_string(),
-                },
-                "INVALID_EMAIL",
-            ),
-            (
-                DomainError::InvalidRelationship {
-                    reason: "empty".to_string(),
-                },
-                "INVALID_RELATIONSHIP",
-            ),
-            (
-                DomainError::InvalidInviteTtl {
-                    reason: "must be > 0".to_string(),
-                },
-                "INVALID_INVITE_TTL",
-            ),
-        ];
-
-        for (err, expected_code) in cases {
+        for (err, expected_code) in validation_error_cases() {
             let (status, content_type, json) = read_problem(domain_error_response(err)).await;
             assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
             assert_eq!(content_type.as_deref(), Some("application/problem+json"));
@@ -319,44 +193,75 @@ mod tests {
 
     #[tokio::test]
     async fn api_json_rejects_malformed_and_missing_field_payloads_with_400_invalid_json() {
-        use axum::{Router, body::Body, routing::post};
-        use serde::Deserialize;
-        use tower::ServiceExt;
-
-        #[derive(Deserialize)]
-        struct Payload {
-            #[allow(dead_code)]
-            name: String,
+        let app = api_json_test_app();
+        for payload in ["{not-json", "{}"] {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(payload))
+                .unwrap();
+            let resp = app.clone().oneshot(req).await.unwrap();
+            let (status, ct, json) = read_problem(resp).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(ct.as_deref(), Some("application/problem+json"));
+            assert_eq!(json["code"], "INVALID_JSON");
         }
+    }
 
-        async fn echo(ApiJson(_body): ApiJson<Payload>) -> StatusCode {
+    async fn read_problem(resp: Response) -> (StatusCode, Option<String>, serde_json::Value) {
+        let status = resp.status();
+        let content_type = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(ToOwned::to_owned);
+        let body = to_bytes(resp.into_body(), 16 * 1024).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        (status, content_type, json)
+    }
+
+    fn non_validation_error_cases() -> [(DomainError, StatusCode, &'static str); 11] {
+        use DomainError as E;
+        use StatusCode as S;
+        let (user_id, family_id, member_id) =
+            (UserId::new_v4(), FamilyId::new_v4(), MemberId::new_v4());
+        [
+            (E::InsufficientRole { role: Role::Child }, S::FORBIDDEN, "INSUFFICIENT_ROLE"),
+            (E::UserNotInFamily { user_id }, S::FORBIDDEN, "USER_NOT_IN_FAMILY"),
+            (E::FamilyNotFound { family_id }, S::NOT_FOUND, "FAMILY_NOT_FOUND"),
+            (E::MemberNotFound { member_id }, S::NOT_FOUND, "MEMBER_NOT_FOUND"),
+            (E::InviteTokenNotFound, S::NOT_FOUND, "INVITE_TOKEN_NOT_FOUND"),
+            (E::FamilyDeleted, S::GONE, "FAMILY_DELETED"),
+            (E::TokenExpired, S::GONE, "TOKEN_EXPIRED"),
+            (E::TokenAlreadyUsed, S::CONFLICT, "TOKEN_ALREADY_USED"),
+            (E::MemberAlreadyExists { user_id }, S::CONFLICT, "MEMBER_ALREADY_EXISTS"),
+            (E::DuplicateOwner, S::CONFLICT, "DUPLICATE_OWNER"),
+            (E::CannotRemoveOwner, S::CONFLICT, "CANNOT_REMOVE_OWNER"),
+        ]
+    }
+
+    fn validation_error_cases() -> [(DomainError, &'static str); 7] {
+        use DomainError as E;
+        let expected = CurrencyCode::try_new("USD").unwrap();
+        let actual = CurrencyCode::try_new("EUR").unwrap();
+        let neg = Money::from_str_parts("-1.00", "USD").unwrap_err();
+        let reason = |msg: &str| msg.to_owned();
+        [
+            (E::CurrencyMismatch { expected, actual }, "CURRENCY_MISMATCH"),
+            (neg, "NEGATIVE_AMOUNT"),
+            (E::ArithmeticOverflow { operation: "money addition" }, "ARITHMETIC_OVERFLOW"),
+            (E::InvalidCurrencyCode { reason: reason("must be 3 chars") }, "INVALID_CURRENCY_CODE"),
+            (E::InvalidEmail { reason: reason("invalid") }, "INVALID_EMAIL"),
+            (E::InvalidRelationship { reason: reason("empty") }, "INVALID_RELATIONSHIP"),
+            (E::InvalidInviteTtl { reason: reason("must be > 0") }, "INVALID_INVITE_TTL"),
+        ]
+    }
+
+    fn api_json_test_app() -> Router {
+        async fn echo(ApiJson(_body): ApiJson<TestPayload>) -> StatusCode {
             StatusCode::OK
         }
-
-        let app = Router::new().route("/", post(echo));
-
-        let malformed_req = Request::builder()
-            .method("POST")
-            .uri("/")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from("{not-json"))
-            .unwrap();
-        let malformed_resp = app.clone().oneshot(malformed_req).await.unwrap();
-        let (status, ct, json) = read_problem(malformed_resp).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(ct.as_deref(), Some("application/problem+json"));
-        assert_eq!(json["code"], "INVALID_JSON");
-
-        let missing_field_req = Request::builder()
-            .method("POST")
-            .uri("/")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from("{}"))
-            .unwrap();
-        let missing_resp = app.oneshot(missing_field_req).await.unwrap();
-        let (status2, ct2, json2) = read_problem(missing_resp).await;
-        assert_eq!(status2, StatusCode::BAD_REQUEST);
-        assert_eq!(ct2.as_deref(), Some("application/problem+json"));
-        assert_eq!(json2["code"], "INVALID_JSON");
+        Router::new().route("/", post(echo))
     }
 }

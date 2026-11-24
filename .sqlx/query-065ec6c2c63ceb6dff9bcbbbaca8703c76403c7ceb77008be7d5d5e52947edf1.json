@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE family_members SET display_name = $3, role = $4, permissions = $5, relationship = $6, joined_at = $7, deleted_at = $8 WHERE id = $1 AND family_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Jsonb",
+        "Varchar",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "065ec6c2c63ceb6dff9bcbbbaca8703c76403c7ceb77008be7d5d5e52947edf1"
+}

@@ -1,146 +1,30 @@
 //! Layer 2b HTTP integration tests for Slice 2 (`GET /families/{id}`, `PUT /families/{id}`).
 
-use std::collections::HashMap;
+mod common;
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::{
-    Router,
     body::{Body, to_bytes},
-    http::{Method, Request, StatusCode, header},
-};
-use chrono::Utc;
-use lambda_http::{
-    aws_lambda_events::apigw::{
-        ApiGatewayRequestAuthorizer, ApiGatewayRequestAuthorizerJwtDescription,
-        ApiGatewayV2httpRequestContext,
-    },
-    request::RequestContext,
+    http::{Method, Request, StatusCode},
 };
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
 use tower::{ServiceBuilder, ServiceExt};
 
 use api::auth::strip_apigw_stage_prefix;
 use domain::{
-    entities::{Family, FamilyParams},
-    errors::DomainError,
-    ports::{FamilyRepository, MemberAccess, MembershipReader, UserFamilySummary},
-    value_objects::{
-        CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTtl, Permission, Role, UserId,
-    },
+    entities::Family,
+    ports::FamilyRepository,
+    value_objects::{CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTtl, Role, UserId},
 };
 use family_service::{AppState, build_router};
 use infrastructure::events::SpyPublisher;
 
-#[derive(Default)]
-struct InMemoryFamilyRepo {
-    families: Mutex<Vec<Family>>,
-    fail_on_save: Option<String>,
-}
-
-struct StubMissingFamilyRepo;
-
-struct RoleUsers {
-    owner: UserId,
-    member: UserId,
-    child: UserId,
-    other: UserId,
-    other_all_perms: UserId,
-    removed_member: UserId,
-}
-
-impl InMemoryFamilyRepo {
-    fn with_families(families: Vec<Family>) -> Self {
-        Self {
-            families: Mutex::new(families),
-            fail_on_save: None,
-        }
-    }
-
-    fn failing_on_save(families: Vec<Family>, message: impl Into<String>) -> Self {
-        Self {
-            families: Mutex::new(families),
-            fail_on_save: Some(message.into()),
-        }
-    }
-}
-
-impl FamilyRepository for InMemoryFamilyRepo {
-    async fn find_by_id(&self, family_id: FamilyId) -> Result<Option<Family>, DomainError> {
-        Ok(self
-            .families
-            .lock()
-            .await
-            .iter()
-            .find(|f| f.id() == family_id)
-            .cloned())
-    }
-
-    async fn list_for_user(&self, _user_id: UserId) -> Result<Vec<UserFamilySummary>, DomainError> {
-        Ok(Vec::new())
-    }
-
-    async fn save(&self, family: &Family) -> Result<(), DomainError> {
-        if let Some(message) = &self.fail_on_save {
-            return Err(DomainError::Internal {
-                message: message.clone(),
-            });
-        }
-        let mut guard = self.families.lock().await;
-        if let Some(existing) = guard.iter_mut().find(|f| f.id() == family.id()) {
-            *existing = family.clone();
-        } else {
-            guard.push(family.clone());
-        }
-        Ok(())
-    }
-}
-
-impl MembershipReader for InMemoryFamilyRepo {
-    async fn find_active_membership(
-        &self,
-        family_id: FamilyId,
-        user_id: UserId,
-    ) -> Result<Option<MemberAccess>, DomainError> {
-        let guard = self.families.lock().await;
-        Ok(guard
-            .iter()
-            .find(|f| f.id() == family_id)
-            .and_then(|f| f.active_members().find(|m| m.user_id() == user_id))
-            .map(|m| MemberAccess {
-                role: m.role(),
-                permissions: m.permissions().to_vec(),
-            }))
-    }
-}
-
-impl FamilyRepository for StubMissingFamilyRepo {
-    async fn find_by_id(&self, _family_id: FamilyId) -> Result<Option<Family>, DomainError> {
-        Ok(None)
-    }
-
-    async fn list_for_user(&self, _user_id: UserId) -> Result<Vec<UserFamilySummary>, DomainError> {
-        Ok(Vec::new())
-    }
-
-    async fn save(&self, _family: &Family) -> Result<(), DomainError> {
-        Ok(())
-    }
-}
-
-impl MembershipReader for StubMissingFamilyRepo {
-    async fn find_active_membership(
-        &self,
-        _family_id: FamilyId,
-        _user_id: UserId,
-    ) -> Result<Option<MemberAccess>, DomainError> {
-        Ok(Some(MemberAccess {
-            role: Role::Owner,
-            permissions: Vec::new(),
-        }))
-    }
-}
+use common::{
+    InMemoryFamilyRepo, StubMissingFamilyRepo, assert_problem, build_family_with_all_roles,
+    get_req, mark_family_soft_deleted, put_req, send_json, test_app, v2_jwt_context,
+};
 
 #[tokio::test]
 async fn get_family_returns_200_for_all_four_active_roles() -> Result<()> {
@@ -154,7 +38,7 @@ async fn get_family_returns_200_for_all_four_active_roles() -> Result<()> {
 
     for uid in [roles.owner, roles.member, roles.child, roles.other] {
         let req = get_req(&path, Some(uid), Some(&fid))?;
-        let (status, _, body) = send(app.clone(), req).await?;
+        let (status, _, body) = send_json(app.clone(), req).await?;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["id"], fid);
         assert_eq!(body["name"], "Household");
@@ -181,7 +65,7 @@ async fn get_family_strips_apigw_named_stage_prefix_and_returns_200() -> Result<
         .header("x-family-id", &fid)
         .body(Body::empty())?;
     req.extensions_mut()
-        .insert(v2_jwt_context_with_stage(roles.owner, Some("dev")));
+        .insert(v2_jwt_context(roles.owner, None, Some("dev")));
 
     let resp = app.oneshot(req).await?;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -311,7 +195,7 @@ async fn put_family_updates_profile_for_owner_and_emits_zero_events() -> Result<
     let body_str = json!({"name": "  Updated Home  ", "home_currency": "EUR"}).to_string();
 
     let req = put_req(&format!("/families/{fid}"), roles.owner, &fid, body_str)?;
-    let (status, _, body) = send(app, req).await?;
+    let (status, _, body) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["id"], fid);
     assert_eq!(body["name"], "Updated Home");
@@ -421,7 +305,7 @@ async fn put_family_returns_422_for_invalid_fields_and_400_for_bad_json() -> Res
 async fn put_family_returns_500_sanitized_on_repository_internal_error() -> Result<()> {
     let (family, roles) = build_family_with_all_roles()?;
     let fid = family.id().to_string();
-    let repo = InMemoryFamilyRepo::failing_on_save(vec![family], "secret dsql connection string");
+    let repo = InMemoryFamilyRepo::failing_on_write(vec![family], "secret dsql connection string");
     let app = test_app(repo, SpyPublisher::new());
     let payload = json!({"name": "New Name", "home_currency": "EUR"}).to_string();
 
@@ -461,65 +345,12 @@ async fn put_family_enforces_multi_family_role_isolation() -> Result<()> {
     let payload = json!({"name": "Renamed", "home_currency": "GBP"}).to_string();
 
     let ok_req = put_req(&format!("/families/{id_a}"), caller, &id_a, payload.clone())?;
-    let (s_ok, _, _) = send(app.clone(), ok_req).await?;
+    let (s_ok, _, _) = send_json(app.clone(), ok_req).await?;
     assert_eq!(s_ok, StatusCode::OK);
 
     let denied_req = put_req(&format!("/families/{id_b}"), caller, &id_b, payload)?;
     assert_problem(app, denied_req, StatusCode::FORBIDDEN, "INSUFFICIENT_ROLE").await?;
     Ok(())
-}
-
-fn build_family_with_all_roles() -> Result<(Family, RoleUsers)> {
-    let owner = UserId::new_v4();
-    let (mut fam, _) = Family::create(
-        FamilyName::try_new("Household")?,
-        CurrencyCode::try_new("USD")?,
-        owner,
-        DisplayName::try_new("Owner")?,
-    )?;
-    let roles = RoleUsers {
-        owner,
-        member: add_member(&mut fam, owner, Role::Member, vec![], "Member")?,
-        child: add_member(&mut fam, owner, Role::Child, vec![], "Child")?,
-        other: add_member(&mut fam, owner, Role::Other, vec![], "Other")?,
-        other_all_perms: add_member(
-            &mut fam,
-            owner,
-            Role::Other,
-            Permission::all().to_vec(),
-            "OtherAll",
-        )?,
-        removed_member: add_removed_member(&mut fam, owner)?,
-    };
-    Ok((fam, roles))
-}
-
-fn add_member(
-    family: &mut Family,
-    owner: UserId,
-    role: Role,
-    permissions: Vec<Permission>,
-    name: &str,
-) -> Result<UserId> {
-    let uid = UserId::new_v4();
-    let (inv, _) =
-        family.create_invite(owner, role, permissions, None, InviteTtl::from_hours(24)?)?;
-    family.accept_invite(inv.token(), uid, DisplayName::try_new(name)?)?;
-    Ok(uid)
-}
-
-fn add_removed_member(family: &mut Family, owner: UserId) -> Result<UserId> {
-    let uid = UserId::new_v4();
-    let (inv, _) = family.create_invite(
-        owner,
-        Role::Member,
-        vec![],
-        None,
-        InviteTtl::from_hours(24)?,
-    )?;
-    let (joined, _) = family.accept_invite(inv.token(), uid, DisplayName::try_new("Removed")?)?;
-    family.remove_member(owner, joined.id())?;
-    Ok(uid)
 }
 
 fn create_family_with_member(owner: UserId, member: UserId, role: Role) -> Result<Family> {
@@ -532,114 +363,4 @@ fn create_family_with_member(owner: UserId, member: UserId, role: Role) -> Resul
     let (inv, _) = fam.create_invite(owner, role, vec![], None, InviteTtl::from_hours(24)?)?;
     fam.accept_invite(inv.token(), member, DisplayName::try_new("Caller Member")?)?;
     Ok(fam)
-}
-
-fn mark_family_soft_deleted(family: &Family) -> Family {
-    Family::reconstitute(FamilyParams {
-        id: family.id(),
-        name: family.name().clone(),
-        home_currency: family.home_currency().clone(),
-        members: family.members().to_vec(),
-        invite_tokens: family.invite_tokens().to_vec(),
-        created_at: family.created_at(),
-        deleted_at: Some(Utc::now()),
-    })
-}
-
-fn test_app(repo: InMemoryFamilyRepo, spy: SpyPublisher) -> Router {
-    build_router(AppState::new(Arc::new(repo), Arc::new(spy)))
-}
-
-fn get_req(
-    uri: &str,
-    user_id: Option<UserId>,
-    family_header: Option<&str>,
-) -> Result<Request<Body>> {
-    request_with_auth(Method::GET, uri, user_id, family_header, None)
-}
-
-fn put_req(uri: &str, user_id: UserId, family_header: &str, body: String) -> Result<Request<Body>> {
-    request_with_auth(
-        Method::PUT,
-        uri,
-        Some(user_id),
-        Some(family_header),
-        Some(body),
-    )
-}
-
-fn request_with_auth(
-    method: Method,
-    uri: &str,
-    user_id: Option<UserId>,
-    family_header: Option<&str>,
-    json_body: Option<String>,
-) -> Result<Request<Body>> {
-    let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(fid) = family_header {
-        builder = builder.header("x-family-id", fid);
-    }
-    let body = match json_body {
-        Some(raw) => {
-            builder = builder.header(header::CONTENT_TYPE, "application/json");
-            Body::from(raw)
-        }
-        None => Body::empty(),
-    };
-    let mut req = builder.body(body)?;
-    if let Some(uid) = user_id {
-        req.extensions_mut().insert(v2_jwt_context(uid));
-    }
-    Ok(req)
-}
-
-fn v2_jwt_context(sub: UserId) -> RequestContext {
-    v2_jwt_context_with_stage(sub, None)
-}
-
-fn v2_jwt_context_with_stage(sub: UserId, stage: Option<&str>) -> RequestContext {
-    let mut jwt = ApiGatewayRequestAuthorizerJwtDescription::default();
-    jwt.claims = HashMap::from([("sub".to_owned(), sub.to_string())]);
-    let mut authorizer = ApiGatewayRequestAuthorizer::default();
-    authorizer.jwt = Some(jwt);
-    let mut v2 = ApiGatewayV2httpRequestContext::default();
-    v2.stage = stage.map(ToOwned::to_owned);
-    v2.authorizer = Some(authorizer);
-    RequestContext::ApiGatewayV2(v2)
-}
-
-async fn assert_problem(
-    app: Router,
-    req: Request<Body>,
-    expected_status: StatusCode,
-    expected_code: &str,
-) -> Result<Value> {
-    let (status, content_type, body) = send(app, req).await?;
-    anyhow::ensure!(
-        status == expected_status,
-        "expected {expected_status}, got {status} (body: {body})"
-    );
-    anyhow::ensure!(
-        content_type.as_deref() == Some("application/problem+json"),
-        "expected application/problem+json, got {content_type:?}"
-    );
-    anyhow::ensure!(
-        body["code"] == expected_code,
-        "expected error code {expected_code}, got {}",
-        body["code"]
-    );
-    Ok(body)
-}
-
-async fn send(app: Router, req: Request<Body>) -> Result<(StatusCode, Option<String>, Value)> {
-    let resp = app.oneshot(req).await?;
-    let status = resp.status();
-    let content_type = resp
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(ToOwned::to_owned);
-    let bytes = to_bytes(resp.into_body(), 64 * 1024).await?;
-    let body = serde_json::from_slice(&bytes)?;
-    Ok((status, content_type, body))
 }

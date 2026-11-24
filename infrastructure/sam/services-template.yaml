@@ -14,6 +14,13 @@ Parameters:
     Type: String
     Description: Aurora DSQL Cluster Identifier (e.g. exampleclusterid1234567890)
 
+  DsqlUser:
+    Type: String
+    Default: familyledger_app
+    AllowedPattern: "^(?!admin$)[a-z][a-z0-9_]{0,62}$"
+    ConstraintDescription: Non-admin IAM-mapped DSQL role name (lowercase letters, digits, underscore; must not be 'admin')
+    Description: IAM-mapped non-admin Aurora DSQL role used by the runtime Lambda (reserve 'admin' for migrate_runner)
+
   CoreStackName:
     Type: String
     Default: familyledger-core-dev
@@ -23,6 +30,9 @@ Parameters:
     Type: String
     Default: familyledger-data-dev
     Description: CloudFormation stack name exporting EventBridge and IAM service role outputs
+
+Conditions:
+  IsDev: !Equals [!Ref Environment, dev]
 
 Globals:
   Function:
@@ -43,8 +53,11 @@ Resources:
       StageName: !Ref Environment
       CorsConfiguration:
         AllowOrigins:
-          - "http://localhost:4200"
-          - Fn::ImportValue: !Sub "${CoreStackName}-CloudFrontUrl"
+          Fn::If:
+            - IsDev
+            - - "http://localhost:4200"
+              - Fn::ImportValue: !Sub "${CoreStackName}-CloudFrontUrl"
+            - - Fn::ImportValue: !Sub "${CoreStackName}-CloudFrontUrl"
         AllowHeaders: [Content-Type, Authorization, X-Amz-Date, X-Api-Key, X-Family-Id]
         AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
         MaxAge: 300
@@ -75,7 +88,7 @@ Resources:
       Environment:
         Variables:
           DSQL_ENDPOINT: !Sub "${DsqlClusterIdentifier}.dsql.${AWS::Region}.on.aws"
-          DSQL_USER: familyledger_app
+          DSQL_USER: !Ref DsqlUser
           EVENT_BUS_NAME:
             Fn::ImportValue: !Sub "${DataStackName}-EventBusName"
       Events:

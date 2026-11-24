@@ -1,9 +1,9 @@
-//! Aurora DSQL persistence adapter for [`FamilyRepository`] and [`MembershipReader`].
+﻿//! Aurora DSQL persistence adapter for [`FamilyRepository`] and [`MembershipReader`].
 
 use aurora_dsql_sqlx_connector::{OCCRetryConfig, retry_on_occ};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use sqlx::{PgConnection, PgPool};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use domain::{
@@ -11,14 +11,19 @@ use domain::{
         Family, FamilyMember, FamilyMemberParams, FamilyParams, InviteToken, InviteTokenParams,
     },
     errors::DomainError,
-    ports::{FamilyRepository, MemberAccess, MembershipReader, UserFamilySummary},
+    events::DomainEvent,
+    ports::{
+        FamilyRepository, MemberAccess, MembershipReader, TokenScope, Updated, UserFamilySummary,
+    },
     value_objects::{
         CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, MemberId, Permission,
         Relationship, Role, UserId,
     },
 };
 
-const MAX_BATCH_ROWS: usize = 500;
+use super::family_writes::{
+    Snapshot, TxFailure, apply_changes, ensure_change_budget, insert_aggregate,
+};
 
 /// Aurora DSQL implementation of [`FamilyRepository`] and [`MembershipReader`].
 #[derive(Debug, Clone)]
@@ -70,40 +75,6 @@ struct UserFamilyRow {
     home_currency: String,
     role: String,
     display_name: String,
-}
-
-struct PreparedFamilySave {
-    id: Uuid,
-    name: String,
-    home_currency: String,
-    created_at: DateTime<Utc>,
-    deleted_at: Option<DateTime<Utc>>,
-    members: Vec<PreparedMember>,
-    invite_tokens: Vec<PreparedInviteToken>,
-}
-
-struct PreparedMember {
-    id: Uuid,
-    family_id: Uuid,
-    user_id: Uuid,
-    display_name: String,
-    role: String,
-    permissions: Value,
-    relationship: Option<String>,
-    joined_at: DateTime<Utc>,
-    deleted_at: Option<DateTime<Utc>>,
-}
-
-struct PreparedInviteToken {
-    token: Uuid,
-    family_id: Uuid,
-    role: String,
-    permissions: Value,
-    relationship: Option<String>,
-    created_by: Uuid,
-    created_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
-    used: bool,
 }
 
 impl DsqlFamilyRepository {
@@ -163,20 +134,24 @@ impl FamilyRepository for DsqlFamilyRepository {
             .map_err(|err| internal_err("Failed to begin read-only family tx", err))?;
 
         let raw_id = family_id.into_inner();
-        let Some(family_row) = fetch_family_row(&mut tx, raw_id).await? else {
+        let Some(family_row) = fetch_family_row(&mut tx, raw_id)
+            .await
+            .map_err(|err| internal_err("Failed to query family_families row", err))?
+        else {
             tx.commit()
                 .await
                 .map_err(|err| internal_err("Failed to commit read-only family tx", err))?;
             return Ok(None);
         };
-        let member_rows = fetch_member_rows(&mut tx, raw_id).await?;
-        let invite_rows = fetch_invite_token_rows(&mut tx, raw_id).await?;
+        let member_rows = fetch_member_rows(&mut tx, raw_id)
+            .await
+            .map_err(|err| internal_err("Failed to query family_members rows", err))?;
 
         tx.commit()
             .await
             .map_err(|err| internal_err("Failed to commit read-only family tx", err))?;
 
-        reconstitute_family(family_row, member_rows, invite_rows).map(Some)
+        reconstitute_family(family_row, member_rows, Vec::new()).map(Some)
     }
 
     async fn list_for_user(&self, user_id: UserId) -> Result<Vec<UserFamilySummary>, DomainError> {
@@ -206,16 +181,125 @@ impl FamilyRepository for DsqlFamilyRepository {
         rows.into_iter().map(map_user_family_summary).collect()
     }
 
-    async fn save(&self, family: &Family) -> Result<(), DomainError> {
-        let prepared = prepare_family_save(family)?;
-        execute_family_save(&self.pool, &self.occ_config, &prepared).await
+    async fn insert_new(&self, family: &Family) -> Result<(), DomainError> {
+        let snapshot = Snapshot::capture(family)?;
+        retry_on_occ(&self.occ_config, || attempt_insert(&self.pool, &snapshot))
+            .await
+            .map_err(|err| internal_err("Failed to insert Family aggregate", err))?
     }
+
+    async fn update<T, F>(
+        &self,
+        family_id: FamilyId,
+        scope: TokenScope,
+        op: F,
+    ) -> Result<Updated<T>, DomainError>
+    where
+        T: Send,
+        F: Fn(&mut Family) -> Result<(T, Vec<DomainEvent>), DomainError> + Send + Sync,
+    {
+        retry_on_occ(&self.occ_config, || {
+            attempt_update(&self.pool, family_id, scope, &op)
+        })
+        .await
+        .map_err(|err| internal_err("Failed to update Family aggregate", err))?
+    }
+}
+
+/// One `insert_new` attempt; a domain verdict is `Ok(Err(..))` so OCC retry never replays it.
+async fn attempt_insert(
+    pool: &PgPool,
+    snapshot: &Snapshot,
+) -> Result<Result<(), DomainError>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let result = insert_aggregate(&mut tx, snapshot).await;
+    finish_tx(tx, result).await
+}
+
+/// One `update` attempt: lock -> load -> `op` -> diff-write -> commit, all in one transaction.
+async fn attempt_update<T, F>(
+    pool: &PgPool,
+    family_id: FamilyId,
+    scope: TokenScope,
+    op: &F,
+) -> Result<Result<Updated<T>, DomainError>, sqlx::Error>
+where
+    F: Fn(&mut Family) -> Result<(T, Vec<DomainEvent>), DomainError>,
+{
+    let mut tx = pool.begin().await?;
+    let result = run_update(&mut tx, family_id, scope, op).await;
+    finish_tx(tx, result).await
+}
+
+async fn run_update<T, F>(
+    conn: &mut PgConnection,
+    family_id: FamilyId,
+    scope: TokenScope,
+    op: &F,
+) -> Result<Updated<T>, TxFailure>
+where
+    F: Fn(&mut Family) -> Result<(T, Vec<DomainEvent>), DomainError>,
+{
+    let mut family = load_locked_family(conn, family_id, scope).await?;
+    let before = Snapshot::capture(&family)?;
+    let (value, events) = op(&mut family)?;
+    let after = Snapshot::capture(&family)?;
+    ensure_change_budget(&before, &after)?;
+    apply_changes(conn, &before, &after).await?;
+    Ok(Updated { value, events })
+}
+
+async fn finish_tx<T>(
+    tx: Transaction<'_, Postgres>,
+    result: Result<T, TxFailure>,
+) -> Result<Result<T, DomainError>, sqlx::Error> {
+    match result {
+        Ok(value) => {
+            tx.commit().await?;
+            Ok(Ok(value))
+        }
+        Err(TxFailure::Domain(err)) => {
+            tx.rollback().await?;
+            Ok(Err(err))
+        }
+        Err(TxFailure::Db(err)) => Err(err),
+    }
+}
+
+async fn load_locked_family(
+    conn: &mut PgConnection,
+    family_id: FamilyId,
+    scope: TokenScope,
+) -> Result<Family, TxFailure> {
+    let raw_id = family_id.into_inner();
+    let family_row = fetch_family_row_for_update(conn, raw_id)
+        .await?
+        .ok_or(DomainError::FamilyNotFound { family_id })?;
+    let member_rows = fetch_member_rows(conn, raw_id).await?;
+    let invite_rows = fetch_scoped_token_rows(conn, raw_id, scope).await?;
+    Ok(reconstitute_family(family_row, member_rows, invite_rows)?)
+}
+
+/// Serializes per-family mutations in one round-trip: `FOR UPDATE` adds the family row to
+/// the OCC write set on Aurora DSQL (conflicting writers retry) and locks on PostgreSQL.
+async fn fetch_family_row_for_update(
+    conn: &mut PgConnection,
+    family_id: Uuid,
+) -> Result<Option<FamilyRow>, sqlx::Error> {
+    sqlx::query_as!(
+        FamilyRow,
+        "SELECT id, name, home_currency, created_at, deleted_at \
+         FROM family_families WHERE id = $1 FOR UPDATE",
+        family_id,
+    )
+    .fetch_optional(conn)
+    .await
 }
 
 async fn fetch_family_row(
     conn: &mut PgConnection,
     family_id: Uuid,
-) -> Result<Option<FamilyRow>, DomainError> {
+) -> Result<Option<FamilyRow>, sqlx::Error> {
     sqlx::query_as!(
         FamilyRow,
         "SELECT id, name, home_currency, created_at, deleted_at \
@@ -224,13 +308,12 @@ async fn fetch_family_row(
     )
     .fetch_optional(conn)
     .await
-    .map_err(|err| internal_err("Failed to query family_families row", err))
 }
 
 async fn fetch_member_rows(
     conn: &mut PgConnection,
     family_id: Uuid,
-) -> Result<Vec<MemberRow>, DomainError> {
+) -> Result<Vec<MemberRow>, sqlx::Error> {
     sqlx::query_as!(
         MemberRow,
         "SELECT id, family_id, user_id, display_name, role, permissions, relationship, joined_at, deleted_at \
@@ -239,184 +322,26 @@ async fn fetch_member_rows(
     )
     .fetch_all(conn)
     .await
-    .map_err(|err| internal_err("Failed to query family_members rows", err))
 }
 
-async fn fetch_invite_token_rows(
+async fn fetch_scoped_token_rows(
     conn: &mut PgConnection,
     family_id: Uuid,
-) -> Result<Vec<InviteTokenRow>, DomainError> {
-    sqlx::query_as!(
+    scope: TokenScope,
+) -> Result<Vec<InviteTokenRow>, sqlx::Error> {
+    let TokenScope::One(token) = scope else {
+        return Ok(Vec::new());
+    };
+    let row = sqlx::query_as!(
         InviteTokenRow,
         "SELECT token, family_id, role, permissions, relationship, created_by, created_at, expires_at, used \
-         FROM family_invite_tokens WHERE family_id = $1 ORDER BY created_at ASC, token ASC",
+         FROM family_invite_tokens WHERE family_id = $1 AND token = $2",
         family_id,
+        token.into_inner(),
     )
-    .fetch_all(conn)
-    .await
-    .map_err(|err| internal_err("Failed to query family_invite_tokens rows", err))
-}
-
-fn prepare_family_save(family: &Family) -> Result<PreparedFamilySave, DomainError> {
-    let total_rows = 1usize
-        .saturating_add(family.members().len())
-        .saturating_add(family.invite_tokens().len());
-    if total_rows > MAX_BATCH_ROWS {
-        return Err(DomainError::InvariantViolation {
-            message: format!(
-                "Family write batch exceeds Aurora DSQL limit ({total_rows} > {MAX_BATCH_ROWS})"
-            ),
-        });
-    }
-    let members = family
-        .members()
-        .iter()
-        .map(prepare_member)
-        .collect::<Result<Vec<_>, _>>()?;
-    let invite_tokens = family
-        .invite_tokens()
-        .iter()
-        .map(prepare_invite_token)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(PreparedFamilySave {
-        id: family.id().into_inner(),
-        name: family.name().as_str().to_owned(),
-        home_currency: family.home_currency().as_str().to_owned(),
-        created_at: family.created_at(),
-        deleted_at: family.deleted_at(),
-        members,
-        invite_tokens,
-    })
-}
-
-fn prepare_member(member: &FamilyMember) -> Result<PreparedMember, DomainError> {
-    let permissions = serde_json::to_value(member.permissions())
-        .map_err(|err| internal_err("Failed to serialize member permissions", err))?;
-    Ok(PreparedMember {
-        id: member.id().into_inner(),
-        family_id: member.family_id().into_inner(),
-        user_id: member.user_id().into_inner(),
-        display_name: member.display_name().as_str().to_owned(),
-        role: member.role().to_string(),
-        permissions,
-        relationship: member.relationship().map(|rel| rel.as_str().to_owned()),
-        joined_at: member.joined_at(),
-        deleted_at: member.deleted_at(),
-    })
-}
-
-fn prepare_invite_token(invite: &InviteToken) -> Result<PreparedInviteToken, DomainError> {
-    let permissions = serde_json::to_value(invite.permissions())
-        .map_err(|err| internal_err("Failed to serialize invite permissions", err))?;
-    Ok(PreparedInviteToken {
-        token: invite.token().into_inner(),
-        family_id: invite.family_id().into_inner(),
-        role: invite.role().to_string(),
-        permissions,
-        relationship: invite.relationship().map(|rel| rel.as_str().to_owned()),
-        created_by: invite.created_by().into_inner(),
-        created_at: invite.created_at(),
-        expires_at: invite.expires_at(),
-        used: invite.is_used(),
-    })
-}
-
-async fn execute_family_save(
-    pool: &PgPool,
-    occ_config: &OCCRetryConfig,
-    payload: &PreparedFamilySave,
-) -> Result<(), DomainError> {
-    retry_on_occ(occ_config, || async {
-        let mut tx = pool.begin().await?;
-        upsert_family_row(&mut tx, payload).await?;
-        for member in &payload.members {
-            upsert_member_row(&mut tx, member).await?;
-        }
-        for invite in &payload.invite_tokens {
-            upsert_invite_token_row(&mut tx, invite).await?;
-        }
-        tx.commit().await
-    })
-    .await
-    .map_err(|err| internal_err("Failed to persist Family aggregate", err))
-}
-
-async fn upsert_family_row(
-    conn: &mut PgConnection,
-    payload: &PreparedFamilySave,
-) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "INSERT INTO family_families (id, name, home_currency, created_at, deleted_at) \
-         VALUES ($1, $2, $3, $4, $5) \
-         ON CONFLICT (id) DO UPDATE SET \
-             name = EXCLUDED.name, \
-             home_currency = EXCLUDED.home_currency, \
-             deleted_at = EXCLUDED.deleted_at",
-        payload.id,
-        payload.name,
-        payload.home_currency,
-        payload.created_at,
-        payload.deleted_at,
-    )
-    .execute(conn)
-    .await
-    .map(|_| ())
-}
-
-async fn upsert_member_row(
-    conn: &mut PgConnection,
-    member: &PreparedMember,
-) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "INSERT INTO family_members \
-             (id, family_id, user_id, display_name, role, permissions, relationship, joined_at, deleted_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-         ON CONFLICT (id) DO UPDATE SET \
-             display_name = EXCLUDED.display_name, \
-             role = EXCLUDED.role, \
-             permissions = EXCLUDED.permissions, \
-             relationship = EXCLUDED.relationship, \
-             joined_at = EXCLUDED.joined_at, \
-             deleted_at = EXCLUDED.deleted_at",
-        member.id,
-        member.family_id,
-        member.user_id,
-        member.display_name,
-        member.role,
-        member.permissions,
-        member.relationship,
-        member.joined_at,
-        member.deleted_at,
-    )
-    .execute(conn)
-    .await
-    .map(|_| ())
-}
-
-async fn upsert_invite_token_row(
-    conn: &mut PgConnection,
-    invite: &PreparedInviteToken,
-) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "INSERT INTO family_invite_tokens \
-             (token, family_id, role, permissions, relationship, created_by, created_at, expires_at, used) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-         ON CONFLICT (token) DO UPDATE SET \
-             used = EXCLUDED.used",
-        invite.token,
-        invite.family_id,
-        invite.role,
-        invite.permissions,
-        invite.relationship,
-        invite.created_by,
-        invite.created_at,
-        invite.expires_at,
-        invite.used,
-    )
-    .execute(conn)
-    .await
-    .map(|_| ())
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.into_iter().collect())
 }
 
 fn map_member_access(row: MembershipRow) -> Result<MemberAccess, DomainError> {

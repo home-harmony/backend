@@ -1,111 +1,29 @@
 //! Layer 2b HTTP integration tests for Slice 1 (`POST /families`, `GET /profile/families`).
 
-use std::collections::HashMap;
+mod common;
+
 use std::sync::Arc;
 
 use anyhow::Result;
 use axum::{
     Router,
-    body::{Body, to_bytes},
+    body::Body,
     http::{Request, StatusCode, header},
 };
 use lambda_http::{
-    aws_lambda_events::apigw::{
-        ApiGatewayProxyRequestContext, ApiGatewayRequestAuthorizer,
-        ApiGatewayRequestAuthorizerJwtDescription, ApiGatewayV2httpRequestContext,
-    },
-    request::RequestContext,
+    aws_lambda_events::apigw::ApiGatewayProxyRequestContext, request::RequestContext,
 };
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
-use tower::ServiceExt;
 
 use domain::{
-    entities::Family,
-    errors::DomainError,
     events::DomainEvent,
-    ports::{FamilyRepository, MemberAccess, MembershipReader, UserFamilySummary},
+    ports::FamilyRepository,
     value_objects::{FamilyId, Role, UserId},
 };
 use family_service::{AppState, build_router};
 use infrastructure::events::SpyPublisher;
 
-#[derive(Default)]
-struct InMemoryFamilyRepo {
-    families: Mutex<Vec<Family>>,
-    fail_with: Option<String>,
-}
-
-impl InMemoryFamilyRepo {
-    fn failing(message: impl Into<String>) -> Self {
-        Self {
-            families: Mutex::new(Vec::new()),
-            fail_with: Some(message.into()),
-        }
-    }
-
-    fn check_failure(&self) -> Result<(), DomainError> {
-        if let Some(message) = &self.fail_with {
-            return Err(DomainError::Internal {
-                message: message.clone(),
-            });
-        }
-        Ok(())
-    }
-}
-
-impl FamilyRepository for InMemoryFamilyRepo {
-    async fn find_by_id(&self, family_id: FamilyId) -> Result<Option<Family>, DomainError> {
-        self.check_failure()?;
-        Ok(self
-            .families
-            .lock()
-            .await
-            .iter()
-            .find(|f| f.id() == family_id)
-            .cloned())
-    }
-
-    async fn list_for_user(&self, user_id: UserId) -> Result<Vec<UserFamilySummary>, DomainError> {
-        self.check_failure()?;
-        let guard = self.families.lock().await;
-        Ok(guard
-            .iter()
-            .filter(|f| !f.is_deleted())
-            .filter_map(|f| summarize_for_user(f, user_id))
-            .collect())
-    }
-
-    async fn save(&self, family: &Family) -> Result<(), DomainError> {
-        self.check_failure()?;
-        let mut guard = self.families.lock().await;
-        if let Some(existing) = guard.iter_mut().find(|f| f.id() == family.id()) {
-            *existing = family.clone();
-        } else {
-            guard.push(family.clone());
-        }
-        Ok(())
-    }
-}
-
-impl MembershipReader for InMemoryFamilyRepo {
-    async fn find_active_membership(
-        &self,
-        family_id: FamilyId,
-        user_id: UserId,
-    ) -> Result<Option<MemberAccess>, DomainError> {
-        self.check_failure()?;
-        let guard = self.families.lock().await;
-        Ok(guard
-            .iter()
-            .find(|f| f.id() == family_id)
-            .and_then(|f| f.active_members().find(|m| m.user_id() == user_id))
-            .map(|m| MemberAccess {
-                role: m.role(),
-                permissions: m.permissions().to_vec(),
-            }))
-    }
-}
+use common::{InMemoryFamilyRepo, send_json, test_app, v2_jwt_context};
 
 #[tokio::test]
 async fn post_families_creates_family_persists_owner_and_publishes_events() -> Result<()> {
@@ -117,9 +35,9 @@ async fn post_families_creates_family_persists_owner_and_publishes_events() -> R
     let req = post_json_with_context(
         "/families",
         &json!({"name": "  Smith Family  ", "home_currency": "USD", "owner_display_name": "Alice"}),
-        v2_jwt_context(&owner_uid.to_string(), Some("alice@example.com")),
+        v2_jwt_context(owner_uid, Some("alice@example.com"), None),
     )?;
-    let (status, _, body) = send(app, req).await?;
+    let (status, _, body) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["name"], "Smith Family");
     assert_eq!(body["home_currency"], "USD");
@@ -141,13 +59,13 @@ async fn post_families_creates_family_persists_owner_and_publishes_events() -> R
 #[tokio::test]
 async fn post_families_accepts_access_token_context_without_email() -> Result<()> {
     let app = test_app(InMemoryFamilyRepo::default(), SpyPublisher::new());
-    let uid = UserId::new_v4().to_string();
+    let uid = UserId::new_v4();
     let req = post_json_with_context(
         "/families",
         &json!({"name": "Second Home", "home_currency": "EUR", "owner_display_name": "Alice"}),
-        v2_jwt_context(&uid, None),
+        v2_jwt_context(uid, None, None),
     )?;
-    let (status, _, body) = send(app, req).await?;
+    let (status, _, body) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["home_currency"], "EUR");
     Ok(())
@@ -159,7 +77,7 @@ async fn post_families_rejects_missing_or_malformed_auth_with_401() -> Result<()
     let valid_body = json!({"name": "Home", "home_currency": "USD", "owner_display_name": "Al"});
 
     let no_ctx = raw_post("/families", valid_body.to_string(), None)?;
-    let (s1, ct1, b1) = send(app.clone(), no_ctx).await?;
+    let (s1, ct1, b1) = send_json(app.clone(), no_ctx).await?;
     assert_eq!(
         (s1, ct1.as_deref()),
         (StatusCode::UNAUTHORIZED, Some("application/problem+json"))
@@ -171,15 +89,18 @@ async fn post_families_rejects_missing_or_malformed_auth_with_401() -> Result<()
         &valid_body,
         RequestContext::ApiGatewayV1(ApiGatewayProxyRequestContext::default()),
     )?;
-    let (s2, _, b2) = send(app.clone(), v1_ctx).await?;
+    let (s2, _, b2) = send_json(app.clone(), v1_ctx).await?;
     assert_eq!(
         (s2, b2["code"].as_str()),
         (StatusCode::UNAUTHORIZED, Some("MISSING_CLAIMS"))
     );
 
-    let bad_sub =
-        post_json_with_context("/families", &valid_body, v2_jwt_context("not-a-uuid", None))?;
-    let (s3, _, b3) = send(app, bad_sub).await?;
+    let bad_sub = post_json_with_context(
+        "/families",
+        &valid_body,
+        common::request_with_sub("not-a-uuid", None, None),
+    )?;
+    let (s3, _, b3) = send_json(app, bad_sub).await?;
     assert_eq!(
         (s3, b3["code"].as_str()),
         (StatusCode::UNAUTHORIZED, Some("INVALID_CLAIMS"))
@@ -190,7 +111,7 @@ async fn post_families_rejects_missing_or_malformed_auth_with_401() -> Result<()
 #[tokio::test]
 async fn post_families_returns_422_for_invalid_domain_fields() -> Result<()> {
     let app = test_app(InMemoryFamilyRepo::default(), SpyPublisher::new());
-    let uid = UserId::new_v4().to_string();
+    let uid = UserId::new_v4();
     let cases = [
         (
             json!({"name": "   ", "home_currency": "USD", "owner_display_name": "Alice"}),
@@ -207,8 +128,8 @@ async fn post_families_returns_422_for_invalid_domain_fields() -> Result<()> {
     ];
 
     for (payload, expected_code) in cases {
-        let req = post_json_with_context("/families", &payload, v2_jwt_context(&uid, None))?;
-        let (status, ct, body) = send(app.clone(), req).await?;
+        let req = post_json_with_context("/families", &payload, v2_jwt_context(uid, None, None))?;
+        let (status, ct, body) = send_json(app.clone(), req).await?;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(ct.as_deref(), Some("application/problem+json"));
         assert_eq!(body["code"], expected_code);
@@ -219,14 +140,14 @@ async fn post_families_returns_422_for_invalid_domain_fields() -> Result<()> {
 #[tokio::test]
 async fn post_families_returns_400_invalid_json_for_malformed_or_incomplete_body() -> Result<()> {
     let app = test_app(InMemoryFamilyRepo::default(), SpyPublisher::new());
-    let uid = UserId::new_v4().to_string();
+    let uid = UserId::new_v4();
 
     let malformed = raw_post(
         "/families",
         "{broken-json".to_owned(),
-        Some(v2_jwt_context(&uid, None)),
+        Some(v2_jwt_context(uid, None, None)),
     )?;
-    let (s1, ct1, b1) = send(app.clone(), malformed).await?;
+    let (s1, ct1, b1) = send_json(app.clone(), malformed).await?;
     assert_eq!(
         (s1, ct1.as_deref()),
         (StatusCode::BAD_REQUEST, Some("application/problem+json"))
@@ -236,9 +157,9 @@ async fn post_families_returns_400_invalid_json_for_malformed_or_incomplete_body
     let missing_field = post_json_with_context(
         "/families",
         &json!({"name": "Home"}),
-        v2_jwt_context(&uid, None),
+        v2_jwt_context(uid, None, None),
     )?;
-    let (s2, ct2, b2) = send(app, missing_field).await?;
+    let (s2, ct2, b2) = send_json(app, missing_field).await?;
     assert_eq!(
         (s2, ct2.as_deref()),
         (StatusCode::BAD_REQUEST, Some("application/problem+json"))
@@ -253,13 +174,13 @@ async fn post_families_returns_201_when_eventbridge_publish_fails() -> Result<()
     let failing_spy = Arc::new(SpyPublisher::failing("EventBridge throttled"));
     let app = build_router(AppState::new(Arc::clone(&repo), failing_spy));
 
-    let uid = UserId::new_v4().to_string();
+    let uid = UserId::new_v4();
     let req = post_json_with_context(
         "/families",
         &json!({"name": "Resilient Family", "home_currency": "USD", "owner_display_name": "Alice"}),
-        v2_jwt_context(&uid, None),
+        v2_jwt_context(uid, None, None),
     )?;
-    let (status, _, body) = send(app, req).await?;
+    let (status, _, body) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::CREATED);
     let family_id: FamilyId = body["id"].as_str().unwrap().parse()?;
     assert!(repo.find_by_id(family_id).await?.is_some());
@@ -272,13 +193,13 @@ async fn post_families_returns_500_sanitized_on_repository_internal_error() -> R
         InMemoryFamilyRepo::failing("aurora dsql internal credentials leaked"),
         SpyPublisher::new(),
     );
-    let uid = UserId::new_v4().to_string();
+    let uid = UserId::new_v4();
     let req = post_json_with_context(
         "/families",
         &json!({"name": "Failing Save", "home_currency": "USD", "owner_display_name": "Alice"}),
-        v2_jwt_context(&uid, None),
+        v2_jwt_context(uid, None, None),
     )?;
-    let (status, ct, body) = send(app, req).await?;
+    let (status, ct, body) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(ct.as_deref(), Some("application/problem+json"));
     assert_eq!(body["code"], "INTERNAL_ERROR");
@@ -294,7 +215,7 @@ async fn get_profile_families_returns_401_when_unauthenticated() -> Result<()> {
         .method("GET")
         .uri("/profile/families")
         .body(Body::empty())?;
-    let (status, ct, body) = send(app, req).await?;
+    let (status, ct, body) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(ct.as_deref(), Some("application/problem+json"));
     assert_eq!(body["code"], "MISSING_CLAIMS");
@@ -304,10 +225,10 @@ async fn get_profile_families_returns_401_when_unauthenticated() -> Result<()> {
 #[tokio::test]
 async fn get_profile_families_returns_empty_list_for_new_user() -> Result<()> {
     let app = test_app(InMemoryFamilyRepo::default(), SpyPublisher::new());
-    let uid = UserId::new_v4().to_string();
-    let (status, _, body) = send(
+    let uid = UserId::new_v4();
+    let (status, _, body) = send_json(
         app,
-        get_with_context("/profile/families", v2_jwt_context(&uid, None))?,
+        get_with_context("/profile/families", v2_jwt_context(uid, None, None))?,
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
@@ -318,16 +239,16 @@ async fn get_profile_families_returns_empty_list_for_new_user() -> Result<()> {
 #[tokio::test]
 async fn get_profile_families_returns_only_callers_active_families() -> Result<()> {
     let app = test_app(InMemoryFamilyRepo::default(), SpyPublisher::new());
-    let user_a = UserId::new_v4().to_string();
-    let user_b = UserId::new_v4().to_string();
+    let user_a = UserId::new_v4();
+    let user_b = UserId::new_v4();
 
-    seed_family_via_http(&app, &user_a, "Family One", "USD", "Alice A").await?;
-    seed_family_via_http(&app, &user_a, "Family Two", "EUR", "Alice E").await?;
-    seed_family_via_http(&app, &user_b, "Other User Home", "GBP", "Bob").await?;
+    seed_family_via_http(&app, user_a, "Family One", "USD", "Alice A").await?;
+    seed_family_via_http(&app, user_a, "Family Two", "EUR", "Alice E").await?;
+    seed_family_via_http(&app, user_b, "Other User Home", "GBP", "Bob").await?;
 
-    let (status, _, body) = send(
+    let (status, _, body) = send_json(
         app,
-        get_with_context("/profile/families", v2_jwt_context(&user_a, None))?,
+        get_with_context("/profile/families", v2_jwt_context(user_a, None, None))?,
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
@@ -344,26 +265,9 @@ async fn get_profile_families_returns_only_callers_active_families() -> Result<(
     Ok(())
 }
 
-fn summarize_for_user(family: &Family, user_id: UserId) -> Option<UserFamilySummary> {
-    family
-        .active_members()
-        .find(|m| m.user_id() == user_id)
-        .map(|m| UserFamilySummary {
-            family_id: family.id(),
-            name: family.name().clone(),
-            home_currency: family.home_currency().clone(),
-            role: m.role(),
-            display_name: m.display_name().clone(),
-        })
-}
-
-fn test_app(repo: InMemoryFamilyRepo, spy: SpyPublisher) -> Router {
-    build_router(AppState::new(Arc::new(repo), Arc::new(spy)))
-}
-
 async fn seed_family_via_http(
     app: &Router,
-    uid: &str,
+    uid: UserId,
     name: &str,
     currency: &str,
     display_name: &str,
@@ -371,28 +275,14 @@ async fn seed_family_via_http(
     let req = post_json_with_context(
         "/families",
         &json!({"name": name, "home_currency": currency, "owner_display_name": display_name}),
-        v2_jwt_context(uid, None),
+        v2_jwt_context(uid, None, None),
     )?;
-    let (status, _, _) = send(app.clone(), req).await?;
+    let (status, _, _) = send_json(app.clone(), req).await?;
     anyhow::ensure!(
         status == StatusCode::CREATED,
         "expected 201 Created, got {status}"
     );
     Ok(())
-}
-
-fn v2_jwt_context(sub: &str, email: Option<&str>) -> RequestContext {
-    let mut claims = HashMap::from([("sub".to_owned(), sub.to_owned())]);
-    if let Some(addr) = email {
-        claims.insert("email".to_owned(), addr.to_owned());
-    }
-    let mut jwt = ApiGatewayRequestAuthorizerJwtDescription::default();
-    jwt.claims = claims;
-    let mut authorizer = ApiGatewayRequestAuthorizer::default();
-    authorizer.jwt = Some(jwt);
-    let mut v2 = ApiGatewayV2httpRequestContext::default();
-    v2.authorizer = Some(authorizer);
-    RequestContext::ApiGatewayV2(v2)
 }
 
 fn post_json_with_context(
@@ -422,17 +312,4 @@ fn get_with_context(uri: &str, ctx: RequestContext) -> Result<Request<Body>> {
         .body(Body::empty())?;
     req.extensions_mut().insert(ctx);
     Ok(req)
-}
-
-async fn send(app: Router, req: Request<Body>) -> Result<(StatusCode, Option<String>, Value)> {
-    let resp = app.oneshot(req).await?;
-    let status = resp.status();
-    let content_type = resp
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(ToOwned::to_owned);
-    let bytes = to_bytes(resp.into_body(), 64 * 1024).await?;
-    let body = serde_json::from_slice(&bytes)?;
-    Ok((status, content_type, body))
 }

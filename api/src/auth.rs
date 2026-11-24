@@ -164,9 +164,6 @@ pub enum AuthError {
 
     #[error("Role '{0}' is not permitted to perform this action")]
     InsufficientRole(Role),
-
-    #[error("Insufficient permissions for role: {0}")]
-    Forbidden(Role),
 }
 
 impl<R> Clone for FamilyAuthState<R> {
@@ -218,7 +215,6 @@ impl IntoResponse for AuthError {
             AuthError::UserNotInFamily(_) => (StatusCode::FORBIDDEN, "USER_NOT_IN_FAMILY"),
             AuthError::FamilyIdMismatch => (StatusCode::FORBIDDEN, "FAMILY_ID_MISMATCH"),
             AuthError::InsufficientRole(_) => (StatusCode::FORBIDDEN, "INSUFFICIENT_ROLE"),
-            AuthError::Forbidden(_) => (StatusCode::FORBIDDEN, "FORBIDDEN"),
         };
         ApiError::problem(status, code, self.to_string()).into_response()
     }
@@ -640,7 +636,7 @@ mod tests {
         obj
     }
 
-    fn auth_error_cases() -> [(AuthError, StatusCode, &'static str); 8] {
+    fn auth_error_cases() -> [(AuthError, StatusCode, &'static str); 7] {
         use AuthError as E;
         use StatusCode as S;
         [
@@ -663,7 +659,6 @@ mod tests {
                 S::FORBIDDEN,
                 "INSUFFICIENT_ROLE",
             ),
-            (E::Forbidden(Role::Child), S::FORBIDDEN, "FORBIDDEN"),
         ]
     }
 

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "FamilyLedger — database repositories, external service adapters, and I/O wrappers."
 
+[features]
+test-utils = []
+
 [dependencies]
 domain = { path = "../domain" }
 
@@ -24,12 +27,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # ── Domain types ──────────────────────────────────────────────────────────────
-rust_decimal = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 
 # ── Error handling ────────────────────────────────────────────────────────────
-thiserror = { workspace = true }
 anyhow = { workspace = true }
 
 # ── Base64 for cursor encoding ────────────────────────────────────────────────
@@ -42,7 +43,6 @@ tracing = { workspace = true }
 # DB integration tests run against a real PostgreSQL via testcontainers.
 # RULE (testing-strategy.md): Do NOT mock database behavior in integration layers.
 testcontainers-modules = { workspace = true }
-tokio = { workspace = true }
 
 [lints]
 workspace = true
