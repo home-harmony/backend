@@ -14,5 +14,5 @@
 # File naming convention:
 #   {YYYYMMDDHHMMSS}_{description}.sql
 #
-# The 34 migration files for Sprint 1 are placed here.
+# All schema table and async index migration files are placed here (chronologically ordered).
 # See documentation/architecture/database-schema.md for the full table and index catalog.

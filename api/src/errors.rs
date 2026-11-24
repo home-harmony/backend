@@ -67,6 +67,7 @@ fn domain_error_status_and_code(err: &DomainError) -> (StatusCode, &'static str)
     match err {
         DomainError::InsufficientRole { .. } => (StatusCode::FORBIDDEN, "INSUFFICIENT_ROLE"),
         DomainError::UserNotInFamily { .. } => (StatusCode::FORBIDDEN, "USER_NOT_IN_FAMILY"),
+        DomainError::FamilyNotFound { .. } => (StatusCode::NOT_FOUND, "FAMILY_NOT_FOUND"),
         DomainError::MemberNotFound { .. } => (StatusCode::NOT_FOUND, "MEMBER_NOT_FOUND"),
         DomainError::InviteTokenNotFound => (StatusCode::NOT_FOUND, "INVITE_TOKEN_NOT_FOUND"),
         DomainError::FamilyDeleted => (StatusCode::GONE, "FAMILY_DELETED"),
@@ -112,7 +113,7 @@ fn domain_error_status_and_code(err: &DomainError) -> (StatusCode, &'static str)
 mod tests {
     use super::*;
     use axum::body::to_bytes;
-    use domain::value_objects::{CurrencyCode, MemberId, Money, Role, UserId};
+    use domain::value_objects::{CurrencyCode, FamilyId, MemberId, Money, Role, UserId};
 
     async fn read_problem(resp: Response) -> (StatusCode, Option<String>, serde_json::Value) {
         let status = resp.status();
@@ -140,6 +141,13 @@ mod tests {
                 },
                 StatusCode::FORBIDDEN,
                 "USER_NOT_IN_FAMILY",
+            ),
+            (
+                DomainError::FamilyNotFound {
+                    family_id: FamilyId::new_v4(),
+                },
+                StatusCode::NOT_FOUND,
+                "FAMILY_NOT_FOUND",
             ),
             (
                 DomainError::MemberNotFound {

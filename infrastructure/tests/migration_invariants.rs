@@ -29,7 +29,7 @@ const EXPECTED_TABLES: [&str; 18] = [
     "exchange_rates",
 ];
 
-const EXPECTED_INDEXES: [&str; 17] = [
+const EXPECTED_INDEXES: [&str; 18] = [
     "idx_members_family",
     "idx_accounts_family",
     "idx_balance_snapshots_account",
@@ -47,6 +47,7 @@ const EXPECTED_INDEXES: [&str; 17] = [
     "idx_goal_contributions",
     "idx_exchange_rates",
     "idx_members_user",
+    "idx_invite_tokens_family",
 ];
 
 const BANNED_SQL_TOKENS: [&str; 7] = [
@@ -68,6 +69,7 @@ fn embedded_dsql_migrator_has_ordered_non_transactional_migrations() -> Result<(
     let versions: Vec<i64> = migrator.iter().map(|m| m.version).collect();
     let mut expected: Vec<i64> = (20260616000001..=20260616000034).collect();
     expected.push(20261124000001);
+    expected.push(20261124000002);
     assert_eq!(versions, expected);
     Ok(())
 }
@@ -75,7 +77,7 @@ fn embedded_dsql_migrator_has_ordered_non_transactional_migrations() -> Result<(
 #[test]
 fn disk_migration_files_enforce_single_ddl_and_dsql_constraints() -> Result<()> {
     let files = collect_migration_files()?;
-    assert_eq!(files.len(), 35);
+    assert_eq!(files.len(), 36);
 
     for path in &files {
         assert_file_satisfies_dsql_rules(path)?;
@@ -87,7 +89,7 @@ fn disk_migration_files_enforce_single_ddl_and_dsql_constraints() -> Result<()> 
 fn table_migrations_match_schema_catalog_and_invite_check() {
     let migrator = dsql_migrator();
     let migrations: Vec<_> = migrator.iter().collect();
-    assert_eq!(migrations.len(), 35);
+    assert_eq!(migrations.len(), 36);
 
     for (idx, table) in EXPECTED_TABLES.iter().enumerate() {
         let sql = migrations[idx].sql.as_str();
@@ -109,7 +111,7 @@ fn table_migrations_match_schema_catalog_and_invite_check() {
 fn index_migrations_use_async_and_rewrite_cleanly_for_postgres() {
     let migrator = dsql_migrator();
     let migrations: Vec<_> = migrator.iter().collect();
-    assert_eq!(migrations.len(), 35);
+    assert_eq!(migrations.len(), 36);
 
     for (offset, index_name) in EXPECTED_INDEXES.iter().enumerate() {
         let sql = migrations[18 + offset].sql.as_str();
@@ -132,7 +134,7 @@ fn index_migrations_use_async_and_rewrite_cleanly_for_postgres() {
             .map(|m| m.version)
             .collect::<BTreeSet<_>>()
             .len(),
-        35
+        36
     );
     for migration in pg_migrator.iter() {
         assert!(migration.no_tx && !migration.sql.as_str().contains("CREATE INDEX ASYNC"));

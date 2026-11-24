@@ -4,7 +4,7 @@ use rust_decimal::Decimal;
 use thiserror::Error;
 
 use crate::value_objects::{
-    CurrencyCode, MemberId, Role, UserId, currency_code::CurrencyCodeError,
+    CurrencyCode, FamilyId, MemberId, Role, UserId, currency_code::CurrencyCodeError,
     display_name::DisplayNameError, email::EmailError, family_name::FamilyNameError,
     invite_ttl::InviteTtlError, relationship::RelationshipError,
 };
@@ -44,6 +44,9 @@ pub enum DomainError {
 
     #[error("Invalid invite TTL: {reason}")]
     InvalidInviteTtl { reason: String },
+
+    #[error("Family not found: {family_id}")]
+    FamilyNotFound { family_id: FamilyId },
 
     #[error("Family has been deleted")]
     FamilyDeleted,

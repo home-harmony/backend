@@ -38,19 +38,25 @@ pub trait MembershipReader: Send + Sync {
 
 /// Persistence port for the [`Family`] aggregate root.
 pub trait FamilyRepository: Send + Sync {
-    /// Loads a non-deleted `Family` aggregate with its members and invite tokens.
+    /// Loads a `Family` aggregate (including `deleted_at`, all active/soft-deleted members,
+    /// and invite tokens) by `family_id`.
+    ///
+    /// Returns `Ok(None)` only when no `family_families` row exists (`DomainError::FamilyNotFound`),
+    /// allowing aggregate methods to surface `DomainError::FamilyDeleted` (`410 Gone`) when
+    /// `deleted_at` is set and reactivate soft-deleted members (`FM-16`).
     fn find_by_id(
         &self,
         family_id: FamilyId,
     ) -> impl Future<Output = Result<Option<Family>, DomainError>> + Send;
 
-    /// Lists all active family workspaces where `user_id` holds an active membership.
+    /// Lists all active (`deleted_at IS NULL`) family workspaces where `user_id` holds an active membership.
     fn list_for_user(
         &self,
         user_id: UserId,
     ) -> impl Future<Output = Result<Vec<UserFamilySummary>, DomainError>> + Send;
 
-    /// Persists the `Family` aggregate state atomically (using OCC retries in DSQL adapters).
+    /// Persists the `Family` aggregate state atomically via idempotent upserts (`INSERT ... ON CONFLICT DO UPDATE`,
+    /// never `DELETE`) wrapped in OCC retries on Aurora DSQL.
     fn save(&self, family: &Family) -> impl Future<Output = Result<(), DomainError>> + Send;
 }
 

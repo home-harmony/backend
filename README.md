@@ -14,7 +14,7 @@ backend/
 ├── .ai/                        # Modular rules (backend-rust, aurora-dsql) & backend skills
 ├── specs/                      # Declarative behavior specifications (ADR-0019)
 │   ├── domain/                 # Pure domain specs (VO, FM)
-│   └── api/                    # API/handler specs (planned)
+│   └── api/                    # API/handler specs (AU multi-family auth)
 ├── migrations/                 # Aurora DSQL SQL migration files (one DDL per file)
 ├── domain/                     # Pure domain logic — zero I/O dependencies
 │   ├── src/
@@ -22,9 +22,10 @@ backend/
 │   │   ├── value_objects/      # Immutable VOs (Money, CurrencyCode, FamilyName, DisplayName, Email, Relationship, InviteTtl, Role, Permission, DomainAction, typed IDs)
 │   │   ├── events/             # Domain events emitted by aggregates
 │   │   ├── errors.rs           # Domain error types
+│   │   ├── ports.rs            # Pure RPITIT repository & EventPublisher ports
 │   │   └── lib.rs
 │   └── tests/
-│       ├── fm_family_rbac.rs   # Blind spec tests for FM-01..FM-22
+│       ├── fm_family_rbac.rs   # Blind spec tests for FM-01..FM-27
 │       ├── spec_traceability.rs # Spec <-> test governance gate (ADR-0019)
 │       └── vo_value_objects.rs # Blind spec tests for VO-01..VO-10
 ├── infrastructure/             # Database repositories & external service adapters
@@ -38,10 +39,12 @@ backend/
 │       ├── migration_invariants.rs # Offline DSQL migration invariant checks
 │       └── migrations_pg.rs    # Docker PostgreSQL 16 integration test (#[ignore])
 ├── api/                        # Shared Axum middleware, auth extraction, RFC 9457 error mapping
-│   └── src/
-│       ├── auth.rs             # AuthClaims extractor (user_id, optional email, verified X-Family-Id)
-│       ├── errors.rs           # DomainError & AuthError -> RFC 9457 application/problem+json
-│       └── response.rs         # Standard response helpers
+│   ├── src/
+│   │   ├── auth.rs             # UserIdentity, AuthClaims, FAMILY_ROUTE_POLICIES & X-Family-Id middleware
+│   │   ├── errors.rs           # DomainError & AuthError -> RFC 9457 application/problem+json
+│   │   └── response.rs         # Standard response helpers
+│   └── tests/
+│       └── au_multi_family_auth.rs # Blind spec tests for AU-01..AU-08
 └── lambdas/
     └── migrate_runner/         # Lambda: applies SQL migrations at deploy time
         └── src/main.rs

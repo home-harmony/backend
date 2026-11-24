@@ -15,9 +15,9 @@
 | :--- | :--- | :--- |
 | `Role` | `domain::value_objects::Role` | `Owner`, `Member`, `Child`, `Other` |
 | `Permission` | `domain::value_objects::Permission` | The 8 **ledger/view capability flags** (`RecordOwnTransactions`, `RecordAnyTransaction`, `ViewAllTransactions`, `ViewAllAccounts`, `ManageOwnAccounts`, `ViewLoans`, `ViewBudget`, `ViewReports`). Does **not** include family membership administration. |
-| `DomainAction` | `domain::value_objects::DomainAction` | Unified policy table key: `Permission(Permission)` or `ManageFamily` evaluated via exhaustive `action_policy` matrix |
-| `FamilyManagement` | `Role::can_manage_family()` / `Role::assert_family_management()` | Exclusive **Owner-only** governance over `Family` membership (inviting members, changing roles, removing members). |
-| `DomainError` | `domain::errors::DomainError` | Typed domain errors (`InsufficientRole`, `FamilyDeleted`, `DuplicateOwner`, `CannotRemoveOwner`, `MemberAlreadyExists`, `MemberNotFound`, `UserNotInFamily`, `InviteTokenNotFound`, `TokenExpired`, `TokenAlreadyUsed`, `InvariantViolation`) |
+| `DomainAction` | `domain::value_objects::DomainAction` | Unified policy table key: `Permission(Permission)`, `ViewFamilyWorkspace` (any active member), or `ManageFamily` (`Owner` only) evaluated via exhaustive `action_policy` matrix |
+| `FamilyManagement` | `Role::can_manage_family()` / `Role::assert_family_management()` | Exclusive **Owner-only** governance over `Family` membership (updating profile, inviting members, changing roles, removing members). |
+| `DomainError` | `domain::errors::DomainError` | Typed domain errors (`InsufficientRole`, `FamilyNotFound`, `FamilyDeleted`, `DuplicateOwner`, `CannotRemoveOwner`, `MemberAlreadyExists`, `MemberNotFound`, `UserNotInFamily`, `InviteTokenNotFound`, `TokenExpired`, `TokenAlreadyUsed`, `InvariantViolation`) |
 
 ---
 

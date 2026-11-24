@@ -1,4 +1,4 @@
-//! Layer 2a database integration tests executing all 34 migrations against PostgreSQL 16.
+//! Layer 2a database integration tests executing all embedded migrations against PostgreSQL 16.
 //!
 //! Run with Docker active:
 //! `cargo test -p infrastructure -- --ignored`
@@ -36,7 +36,7 @@ const EXPECTED_TABLES: [&str; 18] = [
     "exchange_rates",
 ];
 
-const EXPECTED_INDEXES: [&str; 17] = [
+const EXPECTED_INDEXES: [&str; 18] = [
     "idx_members_family",
     "idx_accounts_family",
     "idx_balance_snapshots_account",
@@ -54,23 +54,24 @@ const EXPECTED_INDEXES: [&str; 17] = [
     "idx_goal_contributions",
     "idx_exchange_rates",
     "idx_members_user",
+    "idx_invite_tokens_family",
 ];
 
 #[tokio::test]
 #[ignore = "requires Docker (run: cargo test -p infrastructure -- --ignored)"]
-async fn postgres_applies_all_34_migrations_idempotently_and_enforces_constraints() -> Result<()> {
+async fn postgres_applies_all_migrations_idempotently_and_enforces_constraints() -> Result<()> {
     let (_container, pool) = start_postgres().await?;
 
     let first_run = run_postgres_migrations(&pool).await?;
-    assert_eq!(first_run.total_migrations, 35);
-    assert_eq!(first_run.applied_now, 35);
+    assert_eq!(first_run.total_migrations, 36);
+    assert_eq!(first_run.applied_now, 36);
     assert_eq!(first_run.already_applied, 0);
     assert_eq!(first_run.active_async_jobs, 0);
 
     let second_run = run_postgres_migrations(&pool).await?;
-    assert_eq!(second_run.total_migrations, 35);
+    assert_eq!(second_run.total_migrations, 36);
     assert_eq!(second_run.applied_now, 0);
-    assert_eq!(second_run.already_applied, 35);
+    assert_eq!(second_run.already_applied, 36);
 
     let tables = fetch_tables(&pool).await?;
     let expected_tables: BTreeSet<String> =
