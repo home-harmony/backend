@@ -13,10 +13,11 @@ use domain::{
     errors::DomainError,
     events::DomainEvent,
     ports::{
-        FamilyRepository, MemberAccess, MembershipReader, TokenScope, Updated, UserFamilySummary,
+        FamilyRepository, FamilySummary, MemberAccess, MemberSummary, MembershipReader, TokenScope,
+        Updated, UserFamilySummary,
     },
     value_objects::{
-        CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, MemberId, Permission,
+        CurrencyCode, MemberDisplayName, FamilyId, FamilyName, InviteTokenId, MemberId, Permission,
         Relationship, Role, UserId,
     },
 };
@@ -357,15 +358,16 @@ fn map_user_family_summary(row: UserFamilyRow) -> Result<UserFamilySummary, Doma
     let home_currency = CurrencyCode::try_new(row.home_currency.trim())
         .map_err(|err| internal_err("Invalid persisted home currency", err))?;
     let role = parse_role(&row.role)?;
-    let display_name = DisplayName::try_new(row.display_name)
+    let display_name = MemberDisplayName::try_new(row.display_name)
         .map_err(|err| internal_err("Invalid persisted display name", err))?;
 
     Ok(UserFamilySummary {
-        family_id: FamilyId::from_uuid(row.family_id),
-        name,
-        home_currency,
-        role,
-        display_name,
+        family: FamilySummary {
+            id: FamilyId::from_uuid(row.family_id),
+            name,
+            home_currency,
+        },
+        membership: MemberSummary { role, display_name },
     })
 }
 
@@ -399,7 +401,7 @@ fn reconstitute_family(
 }
 
 fn reconstitute_member(row: MemberRow) -> Result<FamilyMember, DomainError> {
-    let display_name = DisplayName::try_new(row.display_name)
+    let display_name = MemberDisplayName::try_new(row.display_name)
         .map_err(|err| internal_err("Invalid persisted member display name", err))?;
     let role = parse_role(&row.role)?;
     let permissions = parse_permissions(row.permissions)?;

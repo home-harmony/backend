@@ -14,7 +14,7 @@ use domain::{
     entities::Family,
     errors::DomainError,
     ports::{EventPublisher, FamilyRepository, TokenScope},
-    value_objects::{CurrencyCode, DisplayName, FamilyId, FamilyName, Role},
+    value_objects::{CurrencyCode, MemberDisplayName, FamilyId, FamilyName, Role},
 };
 
 use super::{load_family_or_not_found, parse_and_verify_path_family_id, publish_best_effort};
@@ -113,7 +113,7 @@ where
 {
     let name = FamilyName::try_new(req.name)?;
     let home_currency = CurrencyCode::try_new(req.home_currency)?;
-    let owner_display_name = DisplayName::try_new(req.owner_display_name)?;
+    let owner_display_name = MemberDisplayName::try_new(req.owner_display_name)?;
 
     let (family, events) =
         Family::create(name, home_currency, identity.user_id, owner_display_name)?;

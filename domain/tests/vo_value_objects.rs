@@ -6,13 +6,13 @@ use rust_decimal_macros::dec;
 
 use domain::errors::DomainError;
 use domain::value_objects::currency_code::CurrencyCodeError;
-use domain::value_objects::display_name::DisplayNameError;
 use domain::value_objects::email::EmailError;
 use domain::value_objects::family_name::FamilyNameError;
 use domain::value_objects::invite_ttl::InviteTtlError;
+use domain::value_objects::member_display_name::MemberDisplayNameError;
 use domain::value_objects::relationship::RelationshipError;
 use domain::value_objects::{
-    CurrencyCode, DisplayName, Email, FamilyName, InviteTtl, MAX_INVITE_TTL_SECONDS, Money,
+    CurrencyCode, Email, FamilyName, InviteTtl, MAX_INVITE_TTL_SECONDS, MemberDisplayName, Money,
     Relationship,
 };
 
@@ -193,12 +193,12 @@ fn vo_06_money_multiply_and_deserialization_preserve_invariants() {
 
 #[test]
 fn vo_07_display_name_trims_and_enforces_1_to_100_unicode_chars() {
-    let trimmed = DisplayName::try_new("  Alice  ").unwrap();
+    let trimmed = MemberDisplayName::try_new("  Alice  ").unwrap();
     assert_eq!(trimmed.as_str(), "Alice");
 
     for empty in ["", "   "] {
-        let err = DisplayName::try_new(empty).unwrap_err();
-        assert!(matches!(err, DisplayNameError::NotEmptyViolated));
+        let err = MemberDisplayName::try_new(empty).unwrap_err();
+        assert!(matches!(err, MemberDisplayNameError::NotEmptyViolated));
         assert!(matches!(
             DomainError::from(err),
             DomainError::InvalidDisplayName { .. }
@@ -207,13 +207,13 @@ fn vo_07_display_name_trims_and_enforces_1_to_100_unicode_chars() {
 
     let max_chars = "a".repeat(100);
     assert_eq!(
-        DisplayName::try_new(&max_chars).unwrap().as_str(),
+        MemberDisplayName::try_new(&max_chars).unwrap().as_str(),
         max_chars
     );
 
     let over_max = "a".repeat(101);
-    let err = DisplayName::try_new(&over_max).unwrap_err();
-    assert!(matches!(err, DisplayNameError::LenCharMaxViolated));
+    let err = MemberDisplayName::try_new(&over_max).unwrap_err();
+    assert!(matches!(err, MemberDisplayNameError::LenCharMaxViolated));
     assert!(matches!(
         DomainError::from(err),
         DomainError::InvalidDisplayName { .. }

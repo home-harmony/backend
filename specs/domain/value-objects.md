@@ -2,7 +2,7 @@
 
 - **Prefix**: `VO`
 - **Layer**: `domain`
-- **Unit under test**: `domain::value_objects::{Money, CurrencyCode, FamilyName, DisplayName, Email, Relationship, InviteTtl}`
+- **Unit under test**: `domain::value_objects::{Money, CurrencyCode, FamilyName, MemberDisplayName, Email, Relationship, InviteTtl}`
 - **Test seam**: `Layer 1 (Pure Domain)`
 - **Format**: `P` (Property & Boundary Invariants)
 - **Test target**: `domain/tests/vo_value_objects.rs`
@@ -16,7 +16,7 @@
 | `Money` | `domain::value_objects::Money` | Non-negative float-free amount (`rust_decimal::Decimal >= 0`) + `CurrencyCode`. Signed balances belong to `SignedMoney` / `AccountBalanceSnapshot`, not `Money`. |
 | `CurrencyCode` | `domain::value_objects::CurrencyCode` | ISO 4217 3-letter uppercase ASCII string (`CurrencyCode::try_new`) |
 | `FamilyName` | `domain::value_objects::FamilyName` | Validated non-empty trimmed string ($\le 200$ Unicode chars) |
-| `DisplayName` | `domain::value_objects::DisplayName` | Validated non-empty trimmed string ($\le 100$ Unicode chars) |
+| `MemberDisplayName` | `domain::value_objects::MemberDisplayName` | Validated non-empty trimmed string ($\le 100$ Unicode chars) |
 | `Email` | `domain::value_objects::Email` | Trimmed, lowercased email address (`<= 254` bytes, unquoted local part, required TLD, no display text or domain literal) |
 | `Relationship` | `domain::value_objects::Relationship` | Validated non-empty trimmed relationship label ($\le 50$ Unicode chars) |
 | `InviteTtl` | `domain::value_objects::InviteTtl` | Bounded positive expiration duration in seconds (`1..=2_592_000`, max 30 days) |
@@ -100,11 +100,11 @@
   - `Money(0.00 USD).multiply(-1)` $\rightarrow$ `Err(DomainError::NegativeAmount { .. })`
   - `serde_json::from_str::<Money>(r#"{"amount":"-1.00","currency":"USD"}"#)` $\rightarrow$ `Err`
 
-### VO-07 — DisplayName trims whitespace and enforces 1..=100 Unicode characters
+### VO-07 — MemberDisplayName trims whitespace and enforces 1..=100 Unicode characters
 - **Status**: `Approved`
 - **Origin**: `doc:documentation/architecture/database-schema.md`
 - **For all**: Input `&str` `raw`.
-- **Then**: `DisplayName::try_new(raw)` returns `Ok` containing `raw.trim()` iff `1 <= trimmed.chars().count() <= 100`; otherwise returns `Err(DisplayNameError::NotEmptyViolated)` or `Err(DisplayNameError::LenCharMaxViolated)` (`DomainError::InvalidDisplayName`).
+- **Then**: `MemberDisplayName::try_new(raw)` returns `Ok` containing `raw.trim()` iff `1 <= trimmed.chars().count() <= 100`; otherwise returns `Err(MemberDisplayNameError::NotEmptyViolated)` or `Err(MemberDisplayNameError::LenCharMaxViolated)` (`DomainError::InvalidDisplayName`).
 - **Oracle**: Unicode char count of trimmed string in `[1, 100]`.
 - **Boundary Examples**:
   - `"  Alice  "` $\rightarrow$ `Ok("Alice")`

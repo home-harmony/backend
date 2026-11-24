@@ -27,10 +27,11 @@ use domain::{
     errors::DomainError,
     events::DomainEvent,
     ports::{
-        FamilyRepository, MemberAccess, MembershipReader, TokenScope, Updated, UserFamilySummary,
+        FamilyRepository, FamilySummary, MemberAccess, MemberSummary, MembershipReader, TokenScope,
+        Updated, UserFamilySummary,
     },
     value_objects::{
-        CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, InviteTtl, MemberId,
+        CurrencyCode, MemberDisplayName, FamilyId, FamilyName, InviteTokenId, InviteTtl, MemberId,
         Permission, Relationship, Role, UserId,
     },
 };
@@ -242,7 +243,7 @@ pub fn build_family_with_all_roles() -> Result<(Family, RoleUsers)> {
         FamilyName::try_new("Household")?,
         CurrencyCode::try_new("USD")?,
         owner,
-        DisplayName::try_new("Owner")?,
+        MemberDisplayName::try_new("Owner")?,
     )?;
     let (member, member_id) = add_member(&mut fam, owner, Role::Member, vec![], "Member")?;
     let (child, _) = add_member(&mut fam, owner, Role::Child, vec![], "Child")?;
@@ -276,7 +277,7 @@ pub fn add_member(
     let uid = UserId::new_v4();
     let (inv, _) =
         family.create_invite(owner, role, permissions, None, InviteTtl::from_hours(24)?)?;
-    let (joined, _) = family.accept_invite(inv.token(), uid, DisplayName::try_new(name)?)?;
+    let (joined, _) = family.accept_invite(inv.token(), uid, MemberDisplayName::try_new(name)?)?;
     Ok((uid, joined.id()))
 }
 
@@ -547,10 +548,14 @@ fn summarize_for_user(family: &Family, user_id: UserId) -> Option<UserFamilySumm
         .active_members()
         .find(|m| m.user_id() == user_id)
         .map(|m| UserFamilySummary {
-            family_id: family.id(),
-            name: family.name().clone(),
-            home_currency: family.home_currency().clone(),
-            role: m.role(),
-            display_name: m.display_name().clone(),
+            family: FamilySummary {
+                id: family.id(),
+                name: family.name().clone(),
+                home_currency: family.home_currency().clone(),
+            },
+            membership: MemberSummary {
+                role: m.role(),
+                display_name: m.display_name().clone(),
+            },
         })
 }

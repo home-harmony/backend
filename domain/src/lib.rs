@@ -12,11 +12,11 @@
 //! │   └── family.rs       (Family, FamilyMember, InviteToken)
 //! ├── value_objects/  — Immutable domain values with invariants
 //! │   ├── currency_code.rs
-//! │   ├── display_name.rs
 //! │   ├── email.rs
 //! │   ├── family_name.rs
 //! │   ├── ids.rs          (Typed UUID v4 / v7 identifiers)
 //! │   ├── invite_ttl.rs
+//! │   ├── member_display_name.rs
 //! │   ├── money.rs
 //! │   ├── relationship.rs
 //! │   └── role.rs         (Role, Permission, DomainAction)

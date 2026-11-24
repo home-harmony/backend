@@ -6,7 +6,7 @@ use crate::entities::Family;
 use crate::errors::DomainError;
 use crate::events::DomainEvent;
 use crate::value_objects::{
-    CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, Permission, Role, UserId,
+    CurrencyCode, MemberDisplayName, FamilyId, FamilyName, InviteTokenId, Permission, Role, UserId,
 };
 
 /// Resolved active membership permissions for an authenticated caller in a family.
@@ -16,14 +16,26 @@ pub struct MemberAccess {
     pub permissions: Vec<Permission>,
 }
 
+/// Summary of a family workspace in a [`UserFamilySummary`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilySummary {
+    pub id: FamilyId,
+    pub name: FamilyName,
+    pub home_currency: CurrencyCode,
+}
+
+/// Summary of the caller's active membership in a [`UserFamilySummary`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberSummary {
+    pub role: Role,
+    pub display_name: MemberDisplayName,
+}
+
 /// Summary row returned when listing all active families a user belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserFamilySummary {
-    pub family_id: FamilyId,
-    pub name: FamilyName,
-    pub home_currency: CurrencyCode,
-    pub role: Role,
-    pub display_name: DisplayName,
+    pub family: FamilySummary,
+    pub membership: MemberSummary,
 }
 
 /// Read-only port resolving active (`deleted_at IS NULL`) membership for `(family_id, user_id)`.

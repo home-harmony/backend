@@ -5,8 +5,8 @@ use thiserror::Error;
 
 use crate::value_objects::{
     CurrencyCode, FamilyId, MemberId, Role, UserId, currency_code::CurrencyCodeError,
-    display_name::DisplayNameError, email::EmailError, family_name::FamilyNameError,
-    invite_ttl::InviteTtlError, relationship::RelationshipError,
+    email::EmailError, family_name::FamilyNameError, invite_ttl::InviteTtlError,
+    member_display_name::MemberDisplayNameError, relationship::RelationshipError,
 };
 
 /// Errors that can occur within the domain layer.
@@ -115,8 +115,8 @@ impl From<FamilyNameError> for DomainError {
     }
 }
 
-impl From<DisplayNameError> for DomainError {
-    fn from(err: DisplayNameError) -> Self {
+impl From<MemberDisplayNameError> for DomainError {
+    fn from(err: MemberDisplayNameError) -> Self {
         Self::InvalidDisplayName {
             reason: err.to_string(),
         }

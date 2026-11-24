@@ -13,7 +13,7 @@ use api::{
 use domain::{
     errors::DomainError,
     ports::{EventPublisher, FamilyRepository, TokenScope},
-    value_objects::{DisplayName, FamilyId, InviteTtl, MemberId, Relationship},
+    value_objects::{MemberDisplayName, FamilyId, InviteTtl, MemberId, Relationship},
 };
 
 use super::{
@@ -176,7 +176,7 @@ where
     R: FamilyRepository,
     P: EventPublisher,
 {
-    let display_name = DisplayName::try_new(req.display_name)?;
+    let display_name = MemberDisplayName::try_new(req.display_name)?;
     let user_id = identity.user_id;
     let token = req.token;
     let updated = state

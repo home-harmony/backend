@@ -16,7 +16,7 @@ use domain::{
     errors::DomainError,
     ports::{FamilyRepository, MembershipReader, TokenScope},
     value_objects::{
-        CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, InviteTtl, MemberId,
+        CurrencyCode, MemberDisplayName, FamilyId, FamilyName, InviteTokenId, InviteTtl, MemberId,
         Permission, Relationship, Role, UserId,
     },
 };
@@ -90,9 +90,9 @@ async fn list_for_user_and_membership_reader_filter_soft_deleted_and_non_members
 
     let user_a_families = repo.list_for_user(user_a).await?;
     assert_eq!(user_a_families.len(), 1);
-    assert_eq!(user_a_families[0].family_id, active_family_id);
-    assert_eq!(user_a_families[0].role, Role::Owner);
-    assert_eq!(user_a_families[0].display_name.as_str(), "Alice");
+    assert_eq!(user_a_families[0].family.id, active_family_id);
+    assert_eq!(user_a_families[0].membership.role, Role::Owner);
+    assert_eq!(user_a_families[0].membership.display_name.as_str(), "Alice");
 
     let active_access = repo
         .find_active_membership(active_family_id, user_a)
@@ -406,7 +406,7 @@ fn build_family_with_other_member() -> Result<(Family, UserId, InviteTokenId)> {
         FamilyName::try_new("Smith Household")?,
         CurrencyCode::try_new("EUR")?,
         owner_uid,
-        DisplayName::try_new("Alice")?,
+        MemberDisplayName::try_new("Alice")?,
         now,
     )?;
 
@@ -421,7 +421,7 @@ fn build_family_with_other_member() -> Result<(Family, UserId, InviteTokenId)> {
     family.accept_invite_at(
         invite.token(),
         other_uid,
-        DisplayName::try_new("Nana")?,
+        MemberDisplayName::try_new("Nana")?,
         now,
     )?;
     Ok((family, other_uid, invite.token()))
@@ -481,7 +481,7 @@ fn build_soft_deleted_family_fixture() -> Result<(Family, MemberId)> {
         FamilyName::try_new("Deleted Test")?,
         CurrencyCode::try_new("USD")?,
         owner_uid,
-        DisplayName::try_new("Owner")?,
+        MemberDisplayName::try_new("Owner")?,
         now,
     )?;
     let (invite, _) = family.create_invite_at(
@@ -495,7 +495,7 @@ fn build_soft_deleted_family_fixture() -> Result<(Family, MemberId)> {
     let (joined, _) = family.accept_invite_at(
         invite.token(),
         member_uid,
-        DisplayName::try_new("Member")?,
+        MemberDisplayName::try_new("Member")?,
         now,
     )?;
     family.remove_member_at(owner_uid, joined.id(), now)?;
@@ -512,7 +512,7 @@ async fn seed_multi_family_fixtures(
         FamilyName::try_new("Active Home")?,
         CurrencyCode::try_new("USD")?,
         user_a,
-        DisplayName::try_new("Alice")?,
+        MemberDisplayName::try_new("Alice")?,
         now,
     )?;
     repo.insert_new(&active_family).await?;
@@ -523,7 +523,7 @@ async fn seed_multi_family_fixtures(
         FamilyName::try_new("Archived Home")?,
         CurrencyCode::try_new("EUR")?,
         user_a,
-        DisplayName::try_new("Alice Old")?,
+        MemberDisplayName::try_new("Alice Old")?,
         now,
     )?;
     repo.insert_new(&mark_family_soft_deleted(&deleted_family, now))
@@ -542,7 +542,7 @@ async fn seed_removed_member_family(
         FamilyName::try_new("Removed Member Home")?,
         CurrencyCode::try_new("GBP")?,
         owner_uid,
-        DisplayName::try_new("Bob")?,
+        MemberDisplayName::try_new("Bob")?,
         now,
     )?;
     let (invite, _) = family.create_invite_at(
@@ -556,7 +556,7 @@ async fn seed_removed_member_family(
     let (joined, _) = family.accept_invite_at(
         invite.token(),
         removed_uid,
-        DisplayName::try_new("Alice Kid")?,
+        MemberDisplayName::try_new("Alice Kid")?,
         now,
     )?;
     family.remove_member_at(owner_uid, joined.id(), now)?;
@@ -584,7 +584,7 @@ fn build_removed_member_fixture() -> Result<(Family, UserId, UserId, MemberId)> 
         FamilyName::try_new("Reactivation Home")?,
         CurrencyCode::try_new("USD")?,
         owner_uid,
-        DisplayName::try_new("Owner")?,
+        MemberDisplayName::try_new("Owner")?,
         now,
     )?;
     let (inv, _) = family.create_invite_at(
@@ -598,7 +598,7 @@ fn build_removed_member_fixture() -> Result<(Family, UserId, UserId, MemberId)> 
     let (joined, _) = family.accept_invite_at(
         inv.token(),
         member_uid,
-        DisplayName::try_new("Initial")?,
+        MemberDisplayName::try_new("Initial")?,
         now,
     )?;
     family.remove_member_at(owner_uid, joined.id(), now)?;
@@ -664,7 +664,7 @@ fn build_owner_and_member_fixture() -> Result<(Family, UserId, UserId, MemberId)
         FamilyName::try_new("Governance Home")?,
         CurrencyCode::try_new("USD")?,
         owner_uid,
-        DisplayName::try_new("Owner")?,
+        MemberDisplayName::try_new("Owner")?,
         now,
     )?;
     let (inv, _) = family.create_invite_at(
@@ -678,7 +678,7 @@ fn build_owner_and_member_fixture() -> Result<(Family, UserId, UserId, MemberId)
     let (joined, _) = family.accept_invite_at(
         inv.token(),
         member_uid,
-        DisplayName::try_new("Member")?,
+        MemberDisplayName::try_new("Member")?,
         now,
     )?;
     Ok((family, owner_uid, member_uid, joined.id()))
@@ -715,7 +715,7 @@ fn build_family_with_unused_invite() -> Result<(Family, UserId, InviteTokenId)> 
         FamilyName::try_new("Concurrent Home")?,
         CurrencyCode::try_new("USD")?,
         owner_uid,
-        DisplayName::try_new("Owner")?,
+        MemberDisplayName::try_new("Owner")?,
         now,
     )?;
     let (inv, _) =
@@ -737,7 +737,7 @@ async fn accept_invite_via_repo(
     user_id: UserId,
     name: &str,
 ) -> Result<(), DomainError> {
-    let display_name = DisplayName::try_new(name)?;
+    let display_name = MemberDisplayName::try_new(name)?;
     repo.update(family_id, TokenScope::One(token), move |fam| {
         let (_, events) = fam.accept_invite(token, user_id, display_name.clone())?;
         Ok(((), events))

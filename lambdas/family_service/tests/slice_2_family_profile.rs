@@ -16,7 +16,7 @@ use api::auth::strip_apigw_stage_prefix;
 use domain::{
     entities::Family,
     ports::FamilyRepository,
-    value_objects::{CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTtl, Role, UserId},
+    value_objects::{CurrencyCode, MemberDisplayName, FamilyId, FamilyName, InviteTtl, Role, UserId},
 };
 use family_service::{AppState, build_router};
 use infrastructure::events::SpyPublisher;
@@ -334,7 +334,7 @@ async fn put_family_enforces_multi_family_role_isolation() -> Result<()> {
         FamilyName::try_new("Family A")?,
         CurrencyCode::try_new("USD")?,
         caller,
-        DisplayName::try_new("Caller Owner")?,
+        MemberDisplayName::try_new("Caller Owner")?,
     )?;
     let fam_b = create_family_with_member(UserId::new_v4(), caller, Role::Member)?;
     let (id_a, id_b) = (fam_a.id().to_string(), fam_b.id().to_string());
@@ -358,9 +358,9 @@ fn create_family_with_member(owner: UserId, member: UserId, role: Role) -> Resul
         FamilyName::try_new("Family B")?,
         CurrencyCode::try_new("USD")?,
         owner,
-        DisplayName::try_new("Other Owner")?,
+        MemberDisplayName::try_new("Other Owner")?,
     )?;
     let (inv, _) = fam.create_invite(owner, role, vec![], None, InviteTtl::from_hours(24)?)?;
-    fam.accept_invite(inv.token(), member, DisplayName::try_new("Caller Member")?)?;
+    fam.accept_invite(inv.token(), member, MemberDisplayName::try_new("Caller Member")?)?;
     Ok(fam)
 }

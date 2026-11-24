@@ -256,12 +256,12 @@ async fn get_profile_families_returns_only_callers_active_families() -> Result<(
         .as_array()
         .expect("items must be a JSON array");
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0]["name"], "Family One");
-    assert_eq!(items[0]["home_currency"], "USD");
-    assert_eq!(items[0]["role"], "owner");
-    assert_eq!(items[0]["display_name"], "Alice A");
-    assert_eq!(items[1]["name"], "Family Two");
-    assert_eq!(items[1]["home_currency"], "EUR");
+    assert_eq!(items[0]["family"]["name"], "Family One");
+    assert_eq!(items[0]["family"]["home_currency"], "USD");
+    assert_eq!(items[0]["membership"]["role"], "owner");
+    assert_eq!(items[0]["membership"]["display_name"], "Alice A");
+    assert_eq!(items[1]["family"]["name"], "Family Two");
+    assert_eq!(items[1]["family"]["home_currency"], "EUR");
     Ok(())
 }
 

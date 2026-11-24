@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use domain::{
     entities::{Family, FamilyMember, InviteToken},
-    ports::UserFamilySummary,
+    ports::{FamilySummary, MemberSummary, UserFamilySummary},
     value_objects::{
-        CurrencyCode, DisplayName, FamilyId, FamilyName, InviteTokenId, MemberId, Permission,
+        CurrencyCode, MemberDisplayName, FamilyId, FamilyName, InviteTokenId, MemberId, Permission,
         Relationship, Role, UserId,
     },
 };
@@ -93,7 +93,7 @@ pub struct MemberResponse {
     pub id: MemberId,
     pub family_id: FamilyId,
     pub user_id: UserId,
-    pub display_name: DisplayName,
+    pub display_name: MemberDisplayName,
     pub role: Role,
     pub permissions: Vec<Permission>,
     pub relationship: Option<Relationship>,
@@ -106,14 +106,26 @@ pub struct ListMembersResponse {
     pub items: Vec<MemberResponse>,
 }
 
+/// Family workspace summary in a `GET /profile/families` item.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FamilySummaryDto {
+    pub id: FamilyId,
+    pub name: FamilyName,
+    pub home_currency: CurrencyCode,
+}
+
+/// Caller's active membership summary in a `GET /profile/families` item.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemberSummaryDto {
+    pub role: Role,
+    pub display_name: MemberDisplayName,
+}
+
 /// Item in `GET /profile/families` response.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UserFamilySummaryDto {
-    pub family_id: FamilyId,
-    pub name: FamilyName,
-    pub home_currency: CurrencyCode,
-    pub role: Role,
-    pub display_name: DisplayName,
+    pub family: FamilySummaryDto,
+    pub membership: MemberSummaryDto,
 }
 
 /// Response body for `GET /profile/families` (`200 OK`).
@@ -163,14 +175,30 @@ impl From<&FamilyMember> for MemberResponse {
     }
 }
 
+impl From<FamilySummary> for FamilySummaryDto {
+    fn from(summary: FamilySummary) -> Self {
+        Self {
+            id: summary.id,
+            name: summary.name,
+            home_currency: summary.home_currency,
+        }
+    }
+}
+
+impl From<MemberSummary> for MemberSummaryDto {
+    fn from(summary: MemberSummary) -> Self {
+        Self {
+            role: summary.role,
+            display_name: summary.display_name,
+        }
+    }
+}
+
 impl From<UserFamilySummary> for UserFamilySummaryDto {
     fn from(summary: UserFamilySummary) -> Self {
         Self {
-            family_id: summary.family_id,
-            name: summary.name,
-            home_currency: summary.home_currency,
-            role: summary.role,
-            display_name: summary.display_name,
+            family: summary.family.into(),
+            membership: summary.membership.into(),
         }
     }
 }

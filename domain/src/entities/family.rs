@@ -9,7 +9,7 @@
 //! - Active members cannot accept a second invite into the same family; previously
 //!   soft-deleted members are reactivated preserving their `MemberId`.
 //! - Custom [`Permission`] flags can only be configured for [`Role::Other`].
-//! - Member display names cannot be empty or whitespace-only (enforced by [`DisplayName`]).
+//! - Member display names cannot be empty or whitespace-only (enforced by [`MemberDisplayName`]).
 //! - Family names cannot be empty or whitespace-only (enforced by [`FamilyName`]).
 //! - Invite tokens expire after a bounded positive duration (`<= 30 days`).
 //! - Invite tokens cannot be used more than once or at/after `expires_at`.
@@ -21,7 +21,7 @@ use crate::{
     errors::DomainError,
     events::DomainEvent,
     value_objects::{
-        CurrencyCode, DisplayName, DomainAction, FamilyId, FamilyName, InviteTokenId, InviteTtl,
+        CurrencyCode, MemberDisplayName, DomainAction, FamilyId, FamilyName, InviteTokenId, InviteTtl,
         MemberId, Permission, Relationship, Role, UserId,
     },
 };
@@ -44,7 +44,7 @@ pub struct FamilyMemberParams {
     pub id: MemberId,
     pub family_id: FamilyId,
     pub user_id: UserId,
-    pub display_name: DisplayName,
+    pub display_name: MemberDisplayName,
     pub role: Role,
     pub permissions: Vec<Permission>,
     pub relationship: Option<Relationship>,
@@ -95,8 +95,8 @@ pub struct FamilyMember {
     family_id: FamilyId,
     /// Cognito `sub` — the user's permanent identifier from JWT claims.
     user_id: UserId,
-    /// Validated, trimmed display name (1–100 chars). Enforced by [`DisplayName`].
-    display_name: DisplayName,
+    /// Validated, trimmed display name (1–100 chars). Enforced by [`MemberDisplayName`].
+    display_name: MemberDisplayName,
     role: Role,
     /// Custom capability flags (only used when `role == Role::Other`).
     permissions: Vec<Permission>,
@@ -144,7 +144,7 @@ impl Family {
         name: FamilyName,
         home_currency: CurrencyCode,
         owner_user_id: UserId,
-        owner_display_name: DisplayName,
+        owner_display_name: MemberDisplayName,
     ) -> Result<(Self, Vec<DomainEvent>), DomainError> {
         Self::create_at(
             name,
@@ -160,7 +160,7 @@ impl Family {
         name: FamilyName,
         home_currency: CurrencyCode,
         owner_user_id: UserId,
-        owner_display_name: DisplayName,
+        owner_display_name: MemberDisplayName,
         now: DateTime<Utc>,
     ) -> Result<(Self, Vec<DomainEvent>), DomainError> {
         let family_id = FamilyId::new_v4();
@@ -248,7 +248,7 @@ impl Family {
         &mut self,
         token: InviteTokenId,
         user_id: UserId,
-        display_name: DisplayName,
+        display_name: MemberDisplayName,
     ) -> Result<(FamilyMember, Vec<DomainEvent>), DomainError> {
         self.accept_invite_at(token, user_id, display_name, Utc::now())
     }
@@ -258,7 +258,7 @@ impl Family {
         &mut self,
         token: InviteTokenId,
         user_id: UserId,
-        display_name: DisplayName,
+        display_name: MemberDisplayName,
         now: DateTime<Utc>,
     ) -> Result<(FamilyMember, Vec<DomainEvent>), DomainError> {
         self.ensure_active()?;
@@ -470,7 +470,7 @@ impl Family {
     fn upsert_member(
         &mut self,
         user_id: UserId,
-        display_name: DisplayName,
+        display_name: MemberDisplayName,
         role: Role,
         permissions: Vec<Permission>,
         relationship: Option<Relationship>,
@@ -542,7 +542,7 @@ impl FamilyMember {
         self.user_id
     }
 
-    pub fn display_name(&self) -> &DisplayName {
+    pub fn display_name(&self) -> &MemberDisplayName {
         &self.display_name
     }
 
@@ -722,7 +722,7 @@ fn build_owner_member(
     id: MemberId,
     family_id: FamilyId,
     user_id: UserId,
-    display_name: DisplayName,
+    display_name: MemberDisplayName,
     joined_at: DateTime<Utc>,
 ) -> FamilyMember {
     FamilyMember {
@@ -823,8 +823,8 @@ mod tests {
 
     #[test]
     fn display_name_empty_is_rejected_by_value_object() {
-        assert!(DisplayName::try_new("").is_err());
-        assert!(DisplayName::try_new("  ").is_err());
+        assert!(MemberDisplayName::try_new("").is_err());
+        assert!(MemberDisplayName::try_new("  ").is_err());
     }
 
     #[test]
@@ -889,7 +889,7 @@ mod tests {
         assert_eq!(invite.permissions(), &expected_perms);
         assert_eq!(invite.relationship(), Some(&rel));
 
-        let name = DisplayName::try_new("Elena").unwrap();
+        let name = MemberDisplayName::try_new("Elena").unwrap();
         let (member, _) = family
             .accept_invite_at(
                 invite.token(),
@@ -918,7 +918,7 @@ mod tests {
             .accept_invite_at(
                 invite.token(),
                 UserId::new_v4(),
-                DisplayName::try_new("Partner").unwrap(),
+                MemberDisplayName::try_new("Partner").unwrap(),
                 t0() + chrono::Duration::minutes(1),
             )
             .unwrap();
@@ -938,7 +938,7 @@ mod tests {
             .accept_invite_at(
                 invite.token(),
                 bob_id,
-                DisplayName::try_new("Bob Again").unwrap(),
+                MemberDisplayName::try_new("Bob Again").unwrap(),
                 t0() + chrono::Duration::minutes(10),
             )
             .unwrap_err();
@@ -954,7 +954,7 @@ mod tests {
         let carol = family.accept_invite_at(
             invite.token(),
             UserId::new_v4(),
-            DisplayName::try_new("Carol").unwrap(),
+            MemberDisplayName::try_new("Carol").unwrap(),
             t0() + chrono::Duration::minutes(15),
         );
         assert!(carol.is_ok());
@@ -977,7 +977,7 @@ mod tests {
             .accept_invite_at(
                 invite.token(),
                 bob_id,
-                DisplayName::try_new("Robert").unwrap(),
+                MemberDisplayName::try_new("Robert").unwrap(),
                 t0() + chrono::Duration::hours(3),
             )
             .unwrap();
@@ -1002,7 +1002,7 @@ mod tests {
             .accept_invite_at(
                 InviteTokenId::new_v4(),
                 UserId::new_v4(),
-                DisplayName::try_new("Carol").unwrap(),
+                MemberDisplayName::try_new("Carol").unwrap(),
                 t0(),
             )
             .unwrap_err();
@@ -1016,7 +1016,7 @@ mod tests {
         let (invite, _) = family
             .create_invite_at(owner_id, Role::Member, Vec::new(), None, ttl, t0())
             .unwrap();
-        let carol = DisplayName::try_new("Carol").unwrap();
+        let carol = MemberDisplayName::try_new("Carol").unwrap();
 
         // Exact boundary expires_at == now is treated as expired
         let exact_err = family
@@ -1040,14 +1040,14 @@ mod tests {
             .accept_invite_at(
                 invite.token(),
                 UserId::new_v4(),
-                DisplayName::try_new("Bob").unwrap(),
+                MemberDisplayName::try_new("Bob").unwrap(),
                 t0() + chrono::Duration::minutes(1),
             )
             .unwrap();
         let result = family.accept_invite_at(
             invite.token(),
             UserId::new_v4(),
-            DisplayName::try_new("Carol").unwrap(),
+            MemberDisplayName::try_new("Carol").unwrap(),
             t0() + chrono::Duration::minutes(2),
         );
         assert!(matches!(result, Err(DomainError::TokenAlreadyUsed)));
@@ -1064,7 +1064,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(create_err, DomainError::FamilyDeleted);
 
-        let carol = DisplayName::try_new("Carol").unwrap();
+        let carol = MemberDisplayName::try_new("Carol").unwrap();
         let accept_err = deleted_family
             .accept_invite_at(pending_token, UserId::new_v4(), carol, t0())
             .unwrap_err();
@@ -1245,7 +1245,7 @@ mod tests {
         let owner_id = UserId::new_v4();
         let currency = CurrencyCode::try_new("MDL").unwrap();
         let name = FamilyName::try_new("My Family").unwrap();
-        let owner_name = DisplayName::try_new("Ana").unwrap();
+        let owner_name = MemberDisplayName::try_new("Ana").unwrap();
         let (_, events) =
             Family::create_at(name.clone(), currency.clone(), owner_id, owner_name, t0()).unwrap();
 
@@ -1269,7 +1269,7 @@ mod tests {
         let owner_id = UserId::new_v4();
         let currency = CurrencyCode::try_new("USD").unwrap();
         let name = FamilyName::try_new("Test Family").unwrap();
-        let owner_name = DisplayName::try_new("Alice").unwrap();
+        let owner_name = MemberDisplayName::try_new("Alice").unwrap();
         let (family, _) = Family::create_at(name, currency, owner_id, owner_name, t0()).unwrap();
         (family, owner_id)
     }
@@ -1301,7 +1301,7 @@ mod tests {
             .accept_invite_at(
                 invite.token(),
                 user_id,
-                DisplayName::try_new(name).unwrap(),
+                MemberDisplayName::try_new(name).unwrap(),
                 now + chrono::Duration::minutes(5),
             )
             .unwrap();

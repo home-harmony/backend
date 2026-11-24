@@ -6,7 +6,7 @@ use domain::entities::{Family, FamilyMember, FamilyParams, InviteToken};
 use domain::errors::DomainError;
 use domain::events::DomainEvent;
 use domain::value_objects::{
-    CurrencyCode, DisplayName, FamilyName, InviteTokenId, InviteTtl, MemberId, Permission,
+    CurrencyCode, MemberDisplayName, FamilyName, InviteTokenId, InviteTtl, MemberId, Permission,
     Relationship, Role, UserId,
 };
 
@@ -574,7 +574,7 @@ fn create_test_family(owner_user_id: UserId) -> Result<(Family, MemberId), Domai
         FamilyName::try_new("Test Family")?,
         CurrencyCode::try_new("USD")?,
         owner_user_id,
-        DisplayName::try_new("Alice")?,
+        MemberDisplayName::try_new("Alice")?,
         base_time(),
     )?;
     let owner_member_id =
@@ -601,7 +601,7 @@ fn add_fixture_member(
     let (member, _) = family.accept_invite_at(
         token.token(),
         member_user_id,
-        DisplayName::try_new("Bob")?,
+        MemberDisplayName::try_new("Bob")?,
         base_time() + Duration::hours(1),
     )?;
     Ok((member.id(), token))
@@ -692,7 +692,7 @@ fn assert_existing_active_rejected(
     let (token, _) =
         fx.family
             .create_invite_at(fx.owner_user_id, Role::Member, vec![], None, ttl, now)?;
-    let name = DisplayName::try_new("Dup")?;
+    let name = MemberDisplayName::try_new("Dup")?;
     let err = fx
         .family
         .accept_invite_at(token.token(), fx.member_user_id, name, now)
@@ -728,7 +728,7 @@ fn assert_reactivated(
     let (member, events) = fx.family.accept_invite_at(
         token.token(),
         fx.member_user_id,
-        DisplayName::try_new("Grandma Alice")?,
+        MemberDisplayName::try_new("Grandma Alice")?,
         now + Duration::minutes(1),
     )?;
     assert_eq!(member.id(), fx.member_id, "{id}");
@@ -853,7 +853,7 @@ fn execute_deleted_family_action(
     now: DateTime<Utc>,
 ) -> Result<Result<(), DomainError>, DomainError> {
     let ttl = InviteTtl::from_days(1)?;
-    let bob = DisplayName::try_new("Bob")?;
+    let bob = MemberDisplayName::try_new("Bob")?;
     Ok(match action {
         FamilyRuleAction::CreateInviteOnDeletedFamily => fx
             .family
@@ -886,7 +886,7 @@ fn execute_invite_action(
     now: DateTime<Utc>,
 ) -> Result<Result<(), DomainError>, DomainError> {
     let ttl = InviteTtl::from_days(1)?;
-    let bob = DisplayName::try_new("Bob")?;
+    let bob = MemberDisplayName::try_new("Bob")?;
     Ok(match case.action {
         FamilyRuleAction::AcceptExpiredOrMissingOrUsedInvite => {
             accept_special_invite(case.given, fx, bob, now)
@@ -982,7 +982,7 @@ fn execute_non_owner_profile(fx: &mut FamilyFixture) -> Result<Result<(), Domain
 fn accept_special_invite(
     given: FamilyGivenState,
     fx: &mut FamilyFixture,
-    bob: DisplayName,
+    bob: MemberDisplayName,
     now: DateTime<Utc>,
 ) -> Result<(), DomainError> {
     let (token_id, accept_at) = match (given, fx.invite.as_ref()) {

@@ -19,7 +19,7 @@ backend/
 ├── domain/                     # Pure domain logic — zero I/O dependencies
 │   ├── src/
 │   │   ├── entities/           # Aggregate roots (Family, FamilyMember, InviteToken)
-│   │   ├── value_objects/      # Immutable VOs (Money, CurrencyCode, FamilyName, DisplayName, Email, Relationship, InviteTtl, Role, Permission, DomainAction, typed IDs)
+│   │   ├── value_objects/      # Immutable VOs (Money, CurrencyCode, FamilyName, MemberDisplayName, Email, Relationship, InviteTtl, Role, Permission, DomainAction, typed IDs)
 │   │   ├── events/             # Domain events emitted by aggregates
 │   │   ├── errors.rs           # Domain error types
 │   │   ├── ports.rs            # Pure RPITIT repository (`FamilyRepository::{find_by_id, list_for_user, insert_new, update}`, `MembershipReader`) & `EventPublisher` ports
