@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO family_invite_tokens (id, token_hash, family_id, role, permissions, relationship, created_by, created_at, expires_at, used) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bpchar",
+        "Uuid",
+        "Varchar",
+        "Jsonb",
+        "Varchar",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e18aaaa83e5e1b77658dbe46da40a48f32e6f5f42c182bf36adef2a2dc4c9012"
+}

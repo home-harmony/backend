@@ -32,8 +32,5 @@ pub fn nosniff_layer() -> SetResponseHeaderLayer<HeaderValue> {
 
 /// Returns a `tower_http` layer setting `Cache-Control: no-store` for sensitive financial APIs.
 pub fn no_store_cache_layer() -> SetResponseHeaderLayer<HeaderValue> {
-    SetResponseHeaderLayer::overriding(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    )
+    SetResponseHeaderLayer::overriding(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))
 }

@@ -22,3 +22,5 @@
 //! - OFFSET pagination is banned — use keyset cursors only
 
 pub mod db;
+pub mod events;
+pub mod repositories;

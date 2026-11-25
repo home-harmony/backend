@@ -15,7 +15,7 @@ use crate::value_objects::{
 };
 
 /// All domain events emitted across all bounded contexts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
 pub enum DomainEvent {
     // ── Sprint 1: Identity & Family context ─────────────────────────────────────
@@ -112,6 +112,17 @@ impl DomainEvent {
             | DomainEvent::MemberRemoved { occurred_at, .. } => *occurred_at,
         }
     }
+
+    /// Returns the Amazon EventBridge `DetailType` identifier for this event.
+    pub fn detail_type(&self) -> &'static str {
+        match self {
+            DomainEvent::FamilyCreated { .. } => "FamilyCreated",
+            DomainEvent::MemberInvited { .. } => "MemberInvited",
+            DomainEvent::MemberJoined { .. } => "MemberJoined",
+            DomainEvent::MemberRoleChanged { .. } => "MemberRoleChanged",
+            DomainEvent::MemberRemoved { .. } => "MemberRemoved",
+        }
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -153,5 +164,93 @@ mod tests {
         let mut empty_name = json;
         empty_name["name"] = serde_json::json!("   ");
         assert!(serde_json::from_value::<DomainEvent>(empty_name).is_err());
+    }
+
+    #[test]
+    fn detail_type_returns_pascal_case_variant_names() {
+        for (event, expected) in sample_events_with_detail_types() {
+            assert_eq!(event.detail_type(), expected);
+        }
+    }
+
+    fn sample_events_with_detail_types() -> Vec<(DomainEvent, &'static str)> {
+        let family_id = FamilyId::new_v4();
+        let member_id = MemberId::new_v4();
+        let occurred_at = Utc::now();
+        let mut events = sample_family_events(family_id, member_id, occurred_at);
+        events.extend(sample_member_events(family_id, member_id, occurred_at));
+        events.push((
+            DomainEvent::MemberRemoved {
+                family_id,
+                member_id,
+                removed_by: member_id,
+                occurred_at,
+            },
+            "MemberRemoved",
+        ));
+        events
+    }
+
+    fn sample_family_events(
+        family_id: FamilyId,
+        member_id: MemberId,
+        occurred_at: DateTime<Utc>,
+    ) -> Vec<(DomainEvent, &'static str)> {
+        vec![
+            (
+                DomainEvent::FamilyCreated {
+                    family_id,
+                    name: FamilyName::try_new("Smith").unwrap(),
+                    home_currency: CurrencyCode::try_new("USD").unwrap(),
+                    occurred_at,
+                },
+                "FamilyCreated",
+            ),
+            (
+                DomainEvent::MemberInvited {
+                    family_id,
+                    invite_id: InviteId::new_v4(),
+                    invite_token_hash: InviteTokenHash::from_token_id(
+                        crate::value_objects::InviteTokenId::new_v4(),
+                    ),
+                    role: Role::Member,
+                    permissions: vec![],
+                    created_by: member_id,
+                    occurred_at,
+                },
+                "MemberInvited",
+            ),
+        ]
+    }
+
+    fn sample_member_events(
+        family_id: FamilyId,
+        member_id: MemberId,
+        occurred_at: DateTime<Utc>,
+    ) -> Vec<(DomainEvent, &'static str)> {
+        vec![
+            (
+                DomainEvent::MemberJoined {
+                    family_id,
+                    member_id,
+                    user_id: UserId::new_v4(),
+                    role: Role::Member,
+                    occurred_at,
+                },
+                "MemberJoined",
+            ),
+            (
+                DomainEvent::MemberRoleChanged {
+                    family_id,
+                    member_id,
+                    old_role: Role::Member,
+                    new_role: Role::Child,
+                    permissions: vec![],
+                    changed_by: member_id,
+                    occurred_at,
+                },
+                "MemberRoleChanged",
+            ),
+        ]
     }
 }

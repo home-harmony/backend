@@ -32,7 +32,7 @@ Procedural design guide for crates in `backend/` (`domain`, `infrastructure`, `a
 
 ## 2. Modeling Idioms
 
-- **Uniform `nutype` Value Objects**: Validate invariants at construction and deserialization using `try_new` (`CurrencyCode::try_new`, `FamilyName::try_new`, `DisplayName::try_new`, `Email::try_new`, `Relationship::try_new`, `InviteTtl::try_new`), expose `.as_str()` on string VOs, and map `*Error` into `DomainError` via `From`.
+- **Uniform `nutype` Value Objects**: Validate invariants at construction and deserialization using `try_new` (`CurrencyCode::try_new`, `FamilyName::try_new`, `MemberDisplayName::try_new`, `Email::try_new`, `Relationship::try_new`, `InviteTtl::try_new`), expose `.as_str()` on string VOs, and map `*Error` into `DomainError` via `From`.
 - **Enum State Machines & Deterministic Clocks**: Model aggregate lifecycles (`MonthlyBudget` `Draft`/`Active`, `Transaction` kinds) via enums; expose `*_at(..., now: DateTime<Utc>)` core methods with thin `Utc::now()` wrappers so Layer 1 tests stay deterministic.
 - **Checked Financial Math**: Enforce `Money >= 0` on construction, deserialization (`#[serde(try_from = "...")]`), subtraction, and multiplication; use `checked_add` / `checked_sub` / `checked_mul` returning `DomainError::ArithmeticOverflow`. Use `SignedMoney` *(planned Sprint 3)* when negative balances are domain-valid (`AccountBalanceSnapshot`).
 - **Central Exhaustive Error Mapping**: Map every `DomainError` variant exhaustively (no `_ =>` wildcard) in `api/src/errors.rs` to RFC 9457 `application/problem+json` with a distinct machine-readable `code`.

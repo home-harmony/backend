@@ -137,10 +137,7 @@ async fn handle_external_provider<A: CognitoIdentityAdmin>(
 
     purge_unconfirmed_stubs(admin, &input.user_pool_id, &existing).await?;
 
-    let Some(confirmed_user) = existing
-        .iter()
-        .find(|u| u.is_confirmed && u.email_verified)
-    else {
+    let Some(confirmed_user) = existing.iter().find(|u| u.is_confirmed && u.email_verified) else {
         return Ok(PreSignUpDecision {
             auto_confirm_user: true,
             auto_verify_email: true,

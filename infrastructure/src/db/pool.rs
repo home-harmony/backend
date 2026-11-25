@@ -30,37 +30,85 @@ const DEFAULT_LAMBDA_MAX_CONNECTIONS: u32 = 5;
 
 /// Creates and returns an Aurora DSQL connection pool using the default Lambda pool size.
 ///
-/// Requires `DSQL_ENDPOINT` and `DSQL_USER` (must not be `"admin"`, enforcing least privilege
-/// for runtime service Lambdas operating under `FamilyLedgerServiceRole`).
+/// Reads `DSQL_ENDPOINT` (required, either bare hostname or full `postgres://` URL) and
+/// `DSQL_USER` (optional, defaults to `"admin"` for admin utilities such as `migrate_runner`).
+/// Least-privilege runtime services (`dsql:DbConnect` without `dsql:DbConnectAdmin`) must set
+/// `DSQL_USER` (or embed the non-admin user in `DSQL_ENDPOINT`) to a custom database role.
 ///
 /// # Errors
 ///
-/// Returns an error if `DSQL_ENDPOINT` or `DSQL_USER` is missing/invalid, `DSQL_USER == "admin"`,
-/// IAM token generation fails, or establishing the pool fails.
+/// Returns an error if `DSQL_ENDPOINT` is missing/invalid, IAM token generation fails,
+/// or establishing the pool fails.
 pub async fn create_pool() -> Result<PgPool> {
-    create_service_pool(DEFAULT_LAMBDA_MAX_CONNECTIONS).await
+    create_pool_with_max_connections(DEFAULT_LAMBDA_MAX_CONNECTIONS).await
 }
 
-/// Creates and returns an Aurora DSQL service connection pool capped at `max_connections`.
-///
-/// Rejects unset `DSQL_USER` or `"admin"` so runtime services never accidentally connect
-/// with administrative privileges.
+/// Creates and returns an Aurora DSQL connection pool capped at `max_connections`.
 ///
 /// # Errors
 ///
-/// Returns an error if `max_connections == 0`, `DSQL_ENDPOINT` or `DSQL_USER` is missing/invalid,
-/// `DSQL_USER` is `"admin"`, IAM token generation fails, or establishing the pool fails.
-pub async fn create_service_pool(max_connections: u32) -> Result<PgPool> {
-    let user = std::env::var("DSQL_USER")
-        .context("DSQL_USER environment variable is required for service pools")?;
-    let user = user.trim();
-    if user.is_empty() || user.eq_ignore_ascii_case(DEFAULT_DSQL_USER) {
-        bail!("Runtime service pools must set DSQL_USER to a non-admin database role");
-    }
-    connect_pool_with_user(max_connections, user, false).await
+/// Returns an error if `max_connections == 0`, `DSQL_ENDPOINT` is missing/invalid,
+/// IAM token generation fails, or establishing the pool fails.
+pub async fn create_pool_with_max_connections(max_connections: u32) -> Result<PgPool> {
+    let endpoint =
+        std::env::var("DSQL_ENDPOINT").context("DSQL_ENDPOINT environment variable is required")?;
+    let user = std::env::var("DSQL_USER").unwrap_or_else(|_| DEFAULT_DSQL_USER.to_string());
+    let conn_str = normalize_dsql_url(&endpoint, &user)?;
+    connect_dsql_pool(&conn_str, &endpoint, max_connections).await
 }
 
-/// Creates and returns an administrative Aurora DSQL connection pool capped at `max_connections`.
+/// Creates a least-privilege Aurora DSQL connection pool for runtime service Lambdas.
+///
+/// Enforces a non-empty, non-`"admin"` database role via `DSQL_USER` or the URL user.
+///
+/// # Errors
+///
+/// Returns an error if `DSQL_ENDPOINT` is missing/invalid, the resolved role is `"admin"` or
+/// unset, IAM token generation fails, or establishing the pool fails.
+pub async fn create_service_pool() -> Result<PgPool> {
+    create_service_pool_with_max_connections(DEFAULT_LAMBDA_MAX_CONNECTIONS).await
+}
+
+/// Creates a least-privilege Aurora DSQL connection pool capped at `max_connections`.
+///
+/// # Errors
+///
+/// Returns an error if `max_connections == 0`, `DSQL_ENDPOINT` is missing/invalid,
+/// the resolved role is `"admin"` or unset, or establishing the pool fails.
+pub async fn create_service_pool_with_max_connections(max_connections: u32) -> Result<PgPool> {
+    let endpoint =
+        std::env::var("DSQL_ENDPOINT").context("DSQL_ENDPOINT environment variable is required")?;
+    let dsql_user = std::env::var("DSQL_USER").ok();
+    let conn_str = resolve_service_dsql_url(&endpoint, dsql_user.as_deref())?;
+    connect_dsql_pool(&conn_str, &endpoint, max_connections).await
+}
+
+/// Resolves a runtime service connection string, rejecting `"admin"` or missing non-admin role.
+///
+/// # Errors
+///
+/// Returns an error if `endpoint` is invalid, no non-admin role is configured, or the resolved
+/// user is `"admin"`.
+pub fn resolve_service_dsql_url(endpoint: &str, dsql_user: Option<&str>) -> Result<String> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        bail!("DSQL_ENDPOINT must not be empty");
+    }
+    if endpoint.contains("://") {
+        let normalized = normalize_dsql_url(endpoint, "")?;
+        let url_user = extract_url_user(&normalized)?;
+        ensure_non_admin_user(url_user)?;
+        return Ok(normalized);
+    }
+    let user = dsql_user
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .context("DSQL_USER is required for runtime services and must not be 'admin'")?;
+    ensure_non_admin_user(user)?;
+    build_url_from_host(endpoint, user)
+}
+
+/// Creates an administrative Aurora DSQL pool capped at `max_connections`.
 ///
 /// Intended exclusively for `migrate_runner` (`dsql:DbConnectAdmin`). Reads `DSQL_USER`
 /// and defaults to `"admin"` when unset.
@@ -70,18 +118,7 @@ pub async fn create_service_pool(max_connections: u32) -> Result<PgPool> {
 /// Returns an error if `max_connections == 0`, `DSQL_ENDPOINT` is missing/invalid,
 /// IAM token generation fails, or establishing the pool fails.
 pub async fn create_admin_pool(max_connections: u32) -> Result<PgPool> {
-    let user = std::env::var("DSQL_USER").unwrap_or_else(|_| DEFAULT_DSQL_USER.to_string());
-    connect_pool_with_user(max_connections, &user, true).await
-}
-
-/// Alias for [`create_admin_pool`] preserved for administrative callers.
-///
-/// # Errors
-///
-/// Returns an error if `max_connections == 0`, `DSQL_ENDPOINT` is missing/invalid,
-/// IAM token generation fails, or establishing the pool fails.
-pub async fn create_pool_with_max_connections(max_connections: u32) -> Result<PgPool> {
-    create_admin_pool(max_connections).await
+    create_pool_with_max_connections(max_connections).await
 }
 
 /// Redacts userinfo (`user:password@`) and query/fragment parameters before logging `endpoint`.
@@ -134,26 +171,17 @@ pub fn normalize_dsql_url(endpoint: &str, user: &str) -> Result<String> {
     build_url_from_host(endpoint, user)
 }
 
-async fn connect_pool_with_user(
-    max_connections: u32,
-    user: &str,
-    allow_admin: bool,
-) -> Result<PgPool> {
+async fn connect_dsql_pool(conn_str: &str, endpoint: &str, max_connections: u32) -> Result<PgPool> {
     if max_connections == 0 {
         bail!("max_connections must be at least 1");
     }
+    info!(
+        endpoint = %sanitize_endpoint_for_log(endpoint),
+        max_connections,
+        "Connecting to Aurora DSQL"
+    );
 
-    let endpoint =
-        std::env::var("DSQL_ENDPOINT").context("DSQL_ENDPOINT environment variable is required")?;
-    let conn_str = normalize_dsql_url(&endpoint, user)?;
-    if !allow_admin {
-        ensure_non_admin_service_url(&conn_str)?;
-    }
-    let sanitized_endpoint = sanitize_endpoint_for_log(&endpoint);
-
-    info!(endpoint = %sanitized_endpoint, max_connections, "Connecting to Aurora DSQL");
-
-    let config = DsqlConnectOptions::from_connection_string(&conn_str)
+    let config = DsqlConnectOptions::from_connection_string(conn_str)
         .context("Invalid Aurora DSQL connection configuration")?;
     let pool_options = PgPoolOptions::new().max_connections(max_connections);
     let pg_pool = pool::connect_with(&config, pool_options)
@@ -164,16 +192,23 @@ async fn connect_pool_with_user(
     Ok(pg_pool)
 }
 
-fn ensure_non_admin_service_url(conn_str: &str) -> Result<()> {
-    let Some((_, rest)) = conn_str.split_once("://") else {
-        return Ok(());
+fn extract_url_user(url: &str) -> Result<&str> {
+    let Some((_, rest)) = url.split_once("://") else {
+        bail!("Invalid DSQL URL");
     };
-    let Some((userinfo, _)) = rest.split_once('@') else {
-        return Ok(());
+    let authority = rest.split(['/', '?']).next().unwrap_or("");
+    let Some((userinfo, host)) = authority.split_once('@') else {
+        bail!("Service DSQL URL must specify a non-admin user");
     };
-    let username = userinfo.split(':').next().unwrap_or("");
-    if username.eq_ignore_ascii_case(DEFAULT_DSQL_USER) {
-        bail!("Runtime service pools must not embed admin user in DSQL_ENDPOINT");
+    if host.trim().is_empty() {
+        bail!("DSQL URL is missing host component");
+    }
+    Ok(userinfo.split(':').next().unwrap_or("").trim())
+}
+
+fn ensure_non_admin_user(user: &str) -> Result<()> {
+    if user.is_empty() || user.eq_ignore_ascii_case(DEFAULT_DSQL_USER) {
+        bail!("Runtime service DSQL user must be a non-empty, non-admin IAM role");
     }
     Ok(())
 }
@@ -245,6 +280,43 @@ mod tests {
     }
 
     #[test]
+    fn service_dsql_url_accepts_non_admin_role_for_host_and_url() {
+        let host_url =
+            resolve_service_dsql_url("cluster.dsql.us-east-1.on.aws", Some("family_svc")).unwrap();
+        assert_eq!(
+            host_url,
+            "postgres://family_svc@cluster.dsql.us-east-1.on.aws:5432/postgres"
+        );
+
+        let full_url = "postgres://family_svc@cluster.dsql.us-east-1.on.aws:5432/postgres";
+        assert_eq!(resolve_service_dsql_url(full_url, None).unwrap(), full_url);
+    }
+
+    #[test]
+    fn service_dsql_url_rejects_missing_empty_or_admin_role() {
+        let host = "cluster.dsql.us-east-1.on.aws";
+        assert!(resolve_service_dsql_url(host, None).is_err());
+        assert!(resolve_service_dsql_url(host, Some("")).is_err());
+        assert!(resolve_service_dsql_url(host, Some("   ")).is_err());
+        assert!(resolve_service_dsql_url(host, Some("admin")).is_err());
+        assert!(resolve_service_dsql_url(host, Some("ADMIN")).is_err());
+        assert!(
+            resolve_service_dsql_url(
+                "postgres://admin@cluster.dsql.us-east-1.on.aws/postgres",
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_service_dsql_url(
+                "postgres://cluster.dsql.us-east-1.on.aws/postgres",
+                Some("svc")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn sanitize_endpoint_for_log_strips_userinfo_and_query_params() {
         assert_eq!(
             sanitize_endpoint_for_log(
@@ -255,22 +327,6 @@ mod tests {
         assert_eq!(
             sanitize_endpoint_for_log("  cluster.dsql.us-east-1.on.aws  "),
             "cluster.dsql.us-east-1.on.aws"
-        );
-    }
-
-    #[test]
-    fn ensure_non_admin_service_url_rejects_embedded_admin_user() {
-        assert!(
-            ensure_non_admin_service_url(
-                "postgres://admin@cluster.dsql.us-east-1.on.aws:5432/postgres"
-            )
-            .is_err()
-        );
-        assert!(
-            ensure_non_admin_service_url(
-                "postgres://familyledger_app@cluster.dsql.us-east-1.on.aws:5432/postgres"
-            )
-            .is_ok()
         );
     }
 }

@@ -42,9 +42,7 @@ async fn handler(
     Ok(payload)
 }
 
-fn build_policy_input(
-    payload: &CognitoEventUserPoolsPreSignup,
-) -> Result<PreSignUpInput, Error> {
+fn build_policy_input(payload: &CognitoEventUserPoolsPreSignup) -> Result<PreSignUpInput, Error> {
     let user_pool_id = payload
         .cognito_event_user_pools_header
         .user_pool_id
@@ -71,6 +69,10 @@ fn build_policy_input(
         trigger_kind,
         user_name,
         email: payload.request.user_attributes.get("email").cloned(),
-        email_verified: payload.request.user_attributes.get("email_verified").cloned(),
+        email_verified: payload
+            .request
+            .user_attributes
+            .get("email_verified")
+            .cloned(),
     })
 }

@@ -4,9 +4,9 @@ use rust_decimal::Decimal;
 use thiserror::Error;
 
 use crate::value_objects::{
-    CurrencyCode, MemberId, Role, UserId, currency_code::CurrencyCodeError,
-    display_name::DisplayNameError, email::EmailError, family_name::FamilyNameError,
-    invite_ttl::InviteTtlError, relationship::RelationshipError,
+    CurrencyCode, FamilyId, MemberId, Role, UserId, currency_code::CurrencyCodeError,
+    email::EmailError, family_name::FamilyNameError, invite_ttl::InviteTtlError,
+    member_display_name::MemberDisplayNameError, relationship::RelationshipError,
 };
 
 /// Errors that can occur within the domain layer.
@@ -44,6 +44,9 @@ pub enum DomainError {
 
     #[error("Invalid invite TTL: {reason}")]
     InvalidInviteTtl { reason: String },
+
+    #[error("Family not found: {family_id}")]
+    FamilyNotFound { family_id: FamilyId },
 
     #[error("Family has been deleted")]
     FamilyDeleted,
@@ -90,6 +93,10 @@ pub enum DomainError {
     // ── Generic ──────────────────────────────────────────────────────────────────
     #[error("Invariant violation: {message}")]
     InvariantViolation { message: String },
+
+    // ── Infrastructure / Port I/O ────────────────────────────────────────────────
+    #[error("Internal error: {message}")]
+    Internal { message: String },
 }
 
 impl From<CurrencyCodeError> for DomainError {
@@ -108,8 +115,8 @@ impl From<FamilyNameError> for DomainError {
     }
 }
 
-impl From<DisplayNameError> for DomainError {
-    fn from(err: DisplayNameError) -> Self {
+impl From<MemberDisplayNameError> for DomainError {
+    fn from(err: MemberDisplayNameError) -> Self {
         Self::InvalidDisplayName {
             reason: err.to_string(),
         }

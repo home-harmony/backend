@@ -334,7 +334,7 @@ mod tests {
     fn dsql_migrator_disables_advisory_locking_and_validates_invariants() {
         let migrator = dsql_migrator();
         assert!(!migrator.locking);
-        assert_eq!(migrator.iter().len(), 34);
+        assert_eq!(migrator.iter().len(), 36);
         assert!(validate_dsql_invariants(&migrator).is_ok());
     }
 

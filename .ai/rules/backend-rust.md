@@ -18,7 +18,7 @@
 
 ## 2. Type Safety & Value Objects
 
-- **Mandatory `nutype` / Typed IDs**: Every domain identifier (`FamilyId`, `MemberId`, `TransactionId`) and constrained value object (`CurrencyCode`, `FamilyName`, `DisplayName`, `Email`, `Relationship`, `InviteTtl`) must use `nutype` or strongly-typed UUID newtypes (`try_new`). Never pass raw `String`, `Uuid`, or `i64` in domain signatures.
+- **Mandatory `nutype` / Typed IDs**: Every domain identifier (`FamilyId`, `MemberId`, `TransactionId`) and constrained value object (`CurrencyCode`, `FamilyName`, `MemberDisplayName`, `Email`, `Relationship`, `InviteTtl`) must use `nutype` or strongly-typed UUID newtypes (`try_new`). Never pass raw `String`, `Uuid`, or `i64` in domain signatures.
 - **Exact Money**: Monetary values must always use `rust_decimal::Decimal` (`Money` VO for strictly `>= 0` amounts; `SignedMoney` *(planned Sprint 3)* for signed account balances/surplus). **`f32` and `f64` are strictly banned.**
 - **Deterministic Collections**: Add `indexmap::{IndexMap, IndexSet}` when insertion-order maps/sets are needed, or use `BTreeMap`/`BTreeSet` when deterministic sorted order is required.
 

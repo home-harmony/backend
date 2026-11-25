@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE family_invite_tokens SET used = $3 WHERE id = $1 AND family_id = $2 AND used = false",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5a19d4c251a5e119a61fb334aa2f25577062c144012de95575da852e8691d74c"
+}

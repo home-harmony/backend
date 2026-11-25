@@ -24,13 +24,16 @@ serde_json = { workspace = true }
 
 # ── Domain types ──────────────────────────────────────────────────────────────
 uuid = { workspace = true }
-chrono = { workspace = true }
 
 # ── Error handling ────────────────────────────────────────────────────────────
 thiserror = { workspace = true }
 
 # ── Observability ─────────────────────────────────────────────────────────────
 tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true

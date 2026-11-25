@@ -9,7 +9,7 @@
 //! - Active members cannot accept a second invite into the same family; previously
 //!   soft-deleted members are reactivated preserving their `MemberId`.
 //! - Custom [`Permission`] flags can only be configured for [`Role::Other`].
-//! - Member display names cannot be empty or whitespace-only (enforced by [`DisplayName`]).
+//! - Member display names cannot be empty or whitespace-only (enforced by [`MemberDisplayName`]).
 //! - Family names cannot be empty or whitespace-only (enforced by [`FamilyName`]).
 //! - Invite tokens expire after a bounded positive duration (`<= 30 days`).
 //! - Invite tokens cannot be used more than once or at/after `expires_at`.
@@ -24,8 +24,8 @@ use crate::{
     errors::DomainError,
     events::DomainEvent,
     value_objects::{
-        CurrencyCode, DisplayName, DomainAction, FamilyId, FamilyName, InviteId, InviteTokenHash,
-        InviteTokenId, InviteTtl, MemberId, Permission, Relationship, Role, UserId,
+        CurrencyCode, DomainAction, FamilyId, FamilyName, InviteId, InviteTokenHash, InviteTokenId,
+        InviteTtl, MemberDisplayName, MemberId, Permission, Relationship, Role, UserId,
     },
 };
 
@@ -47,7 +47,7 @@ pub struct FamilyMemberParams {
     pub id: MemberId,
     pub family_id: FamilyId,
     pub user_id: UserId,
-    pub display_name: DisplayName,
+    pub display_name: MemberDisplayName,
     pub role: Role,
     pub permissions: Vec<Permission>,
     pub relationship: Option<Relationship>,
@@ -113,8 +113,8 @@ pub struct FamilyMember {
     family_id: FamilyId,
     /// Cognito `sub` — the user's permanent identifier from JWT claims.
     user_id: UserId,
-    /// Validated, trimmed display name (1–100 chars). Enforced by [`DisplayName`].
-    display_name: DisplayName,
+    /// Validated, trimmed display name (1–100 chars). Enforced by [`MemberDisplayName`].
+    display_name: MemberDisplayName,
     role: Role,
     /// Custom capability flags (only used when `role == Role::Other`).
     permissions: Vec<Permission>,
@@ -171,7 +171,7 @@ impl Family {
         name: FamilyName,
         home_currency: CurrencyCode,
         owner_user_id: UserId,
-        owner_display_name: DisplayName,
+        owner_display_name: MemberDisplayName,
     ) -> Result<(Self, Vec<DomainEvent>), DomainError> {
         Self::create_at(
             name,
@@ -187,7 +187,7 @@ impl Family {
         name: FamilyName,
         home_currency: CurrencyCode,
         owner_user_id: UserId,
-        owner_display_name: DisplayName,
+        owner_display_name: MemberDisplayName,
         now: DateTime<Utc>,
     ) -> Result<(Self, Vec<DomainEvent>), DomainError> {
         let family_id = FamilyId::new_v4();
@@ -257,23 +257,17 @@ impl Family {
         let creator_member_id = self.authorize_owner(created_by_user_id)?;
         validate_invite_params(role, &permissions)?;
         let permissions = deduplicate_permissions(permissions);
-        let expires_at =
-            now.checked_add_signed(ttl.as_duration())
-                .ok_or(DomainError::ArithmeticOverflow {
-                    operation: "invite expiration",
-                })?;
-
-        let (invite, event) = build_invite_and_event(
+        let invite = build_invite(
             self.id,
             creator_member_id,
             role,
             permissions,
             relationship,
+            ttl,
             now,
-            expires_at,
-        );
+        )?;
         self.invite_tokens.push(invite.clone());
-        Ok((invite, vec![event]))
+        Ok((invite.clone(), vec![invite_created_event(&invite)]))
     }
 
     /// Accepts an invite token and adds (or reactivates) the user as a member.
@@ -281,7 +275,7 @@ impl Family {
         &mut self,
         token: InviteTokenId,
         user_id: UserId,
-        display_name: DisplayName,
+        display_name: MemberDisplayName,
     ) -> Result<(FamilyMember, Vec<DomainEvent>), DomainError> {
         self.accept_invite_at(token, user_id, display_name, Utc::now())
     }
@@ -291,7 +285,7 @@ impl Family {
         &mut self,
         token: InviteTokenId,
         user_id: UserId,
-        display_name: DisplayName,
+        display_name: MemberDisplayName,
         now: DateTime<Utc>,
     ) -> Result<(FamilyMember, Vec<DomainEvent>), DomainError> {
         self.ensure_active()?;
@@ -401,6 +395,20 @@ impl Family {
         }])
     }
 
+    /// Updates the family's display name and home display currency (`Role::Owner` only).
+    pub fn update_profile(
+        &mut self,
+        requester_user_id: UserId,
+        new_name: FamilyName,
+        new_home_currency: CurrencyCode,
+    ) -> Result<(), DomainError> {
+        self.ensure_active()?;
+        self.authorize_owner(requester_user_id)?;
+        self.name = new_name;
+        self.home_currency = new_home_currency;
+        Ok(())
+    }
+
     pub fn id(&self) -> FamilyId {
         self.id
     }
@@ -489,7 +497,7 @@ impl Family {
     fn upsert_member(
         &mut self,
         user_id: UserId,
-        display_name: DisplayName,
+        display_name: MemberDisplayName,
         role: Role,
         permissions: Vec<Permission>,
         relationship: Option<Relationship>,
@@ -561,7 +569,7 @@ impl FamilyMember {
         self.user_id
     }
 
-    pub fn display_name(&self) -> &DisplayName {
+    pub fn display_name(&self) -> &MemberDisplayName {
         &self.display_name
     }
 
@@ -613,6 +621,11 @@ impl FamilyMember {
     /// Asserts that this member can manage family membership (`Role::Owner` only).
     pub fn assert_family_management(&self) -> Result<(), DomainError> {
         self.role.assert_family_management()
+    }
+
+    /// Returns `true` if this member can view the family workspace and active member roster.
+    pub fn can_view_family_workspace(&self) -> bool {
+        self.can_perform(DomainAction::ViewFamilyWorkspace)
     }
 
     /// Returns `true` if this member can access debt/loan features.
@@ -740,48 +753,53 @@ impl fmt::Debug for InviteToken {
     }
 }
 
-fn build_invite_and_event(
+fn build_invite(
     family_id: FamilyId,
     created_by: MemberId,
     role: Role,
     permissions: Vec<Permission>,
     relationship: Option<Relationship>,
-    created_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
-) -> (InviteToken, DomainEvent) {
-    let invite_id = InviteId::new_v4();
+    ttl: InviteTtl,
+    now: DateTime<Utc>,
+) -> Result<InviteToken, DomainError> {
+    let expires_at =
+        now.checked_add_signed(ttl.as_duration())
+            .ok_or(DomainError::ArithmeticOverflow {
+                operation: "invite expiration",
+            })?;
     let token = InviteTokenId::new_v4();
-    let token_hash = InviteTokenHash::from_token_id(token);
-    let invite = InviteToken {
-        id: invite_id,
-        token_hash: token_hash.clone(),
+    Ok(InviteToken {
+        id: InviteId::new_v4(),
+        token_hash: InviteTokenHash::from_token_id(token),
         token: Some(token),
         family_id,
         role,
-        permissions: permissions.clone(),
+        permissions,
         relationship,
         created_by,
-        created_at,
+        created_at: now,
         expires_at,
         used: false,
-    };
-    let event = DomainEvent::MemberInvited {
-        family_id,
-        invite_id,
-        invite_token_hash: token_hash,
-        role,
-        permissions,
-        created_by,
-        occurred_at: created_at,
-    };
-    (invite, event)
+    })
+}
+
+fn invite_created_event(invite: &InviteToken) -> DomainEvent {
+    DomainEvent::MemberInvited {
+        family_id: invite.family_id,
+        invite_id: invite.id,
+        invite_token_hash: invite.token_hash.clone(),
+        role: invite.role,
+        permissions: invite.permissions.clone(),
+        created_by: invite.created_by,
+        occurred_at: invite.created_at,
+    }
 }
 
 fn build_owner_member(
     id: MemberId,
     family_id: FamilyId,
     user_id: UserId,
-    display_name: DisplayName,
+    display_name: MemberDisplayName,
     joined_at: DateTime<Utc>,
 ) -> FamilyMember {
     FamilyMember {
@@ -863,48 +881,6 @@ fn deduplicate_permissions(permissions: Vec<Permission>) -> Vec<Permission> {
 mod tests {
     use super::*;
 
-    fn t0() -> DateTime<Utc> {
-        DateTime::from_timestamp(1_780_000_000, 0).unwrap()
-    }
-
-    fn make_family() -> (Family, UserId) {
-        let owner_id = UserId::new_v4();
-        let currency = CurrencyCode::try_new("USD").unwrap();
-        let name = FamilyName::try_new("Test Family").unwrap();
-        let owner_name = DisplayName::try_new("Alice").unwrap();
-        let (family, _) = Family::create_at(name, currency, owner_id, owner_name, t0()).unwrap();
-        (family, owner_id)
-    }
-
-    fn invite_and_accept_at(
-        family: &mut Family,
-        owner_id: UserId,
-        user_id: UserId,
-        name: &str,
-        role: Role,
-        now: DateTime<Utc>,
-    ) -> FamilyMember {
-        let (invite, _) = family
-            .create_invite_at(
-                owner_id,
-                role,
-                Vec::new(),
-                None,
-                InviteTtl::from_hours(48).unwrap(),
-                now,
-            )
-            .unwrap();
-        let (member, _) = family
-            .accept_invite_at(
-                invite.token(),
-                user_id,
-                DisplayName::try_new(name).unwrap(),
-                now + chrono::Duration::minutes(5),
-            )
-            .unwrap();
-        member
-    }
-
     #[test]
     fn family_create_succeeds() {
         let (family, _) = make_family();
@@ -924,8 +900,8 @@ mod tests {
 
     #[test]
     fn display_name_empty_is_rejected_by_value_object() {
-        assert!(DisplayName::try_new("").is_err());
-        assert!(DisplayName::try_new("  ").is_err());
+        assert!(MemberDisplayName::try_new("").is_err());
+        assert!(MemberDisplayName::try_new("  ").is_err());
     }
 
     #[test]
@@ -946,14 +922,8 @@ mod tests {
             Err(DomainError::InsufficientRole { role: Role::Member })
         ));
 
-        let result = family.create_invite_at(
-            member_user_id,
-            Role::Child,
-            Vec::new(),
-            None,
-            InviteTtl::from_hours(24).unwrap(),
-            t0(),
-        );
+        let ttl = InviteTtl::from_hours(24).unwrap();
+        let result = family.create_invite_at(member_user_id, Role::Child, vec![], None, ttl, t0());
         assert!(matches!(
             result,
             Err(DomainError::InsufficientRole { role: Role::Member })
@@ -963,26 +933,21 @@ mod tests {
     #[test]
     fn invite_for_owner_role_is_rejected() {
         let (mut family, owner_id) = make_family();
-        let result = family.create_invite_at(
-            owner_id,
-            Role::Owner,
-            Vec::new(),
-            None,
-            InviteTtl::from_hours(24).unwrap(),
-            t0(),
-        );
+        let ttl = InviteTtl::from_hours(24).unwrap();
+        let result = family.create_invite_at(owner_id, Role::Owner, Vec::new(), None, ttl, t0());
         assert!(matches!(result, Err(DomainError::DuplicateOwner)));
     }
 
     #[test]
     fn custom_permissions_rejected_for_non_other_roles() {
         let (mut family, owner_id) = make_family();
+        let ttl = InviteTtl::from_hours(24).unwrap();
         let result = family.create_invite_at(
             owner_id,
             Role::Member,
             vec![Permission::ViewLoans],
             None,
-            InviteTtl::from_hours(24).unwrap(),
+            ttl,
             t0(),
         );
         assert!(matches!(
@@ -1000,66 +965,43 @@ mod tests {
             Permission::RecordOwnTransactions,
             Permission::ViewBudget,
         ];
-        let expected_perms = vec![Permission::ViewBudget, Permission::RecordOwnTransactions];
-        let relationship = Relationship::try_new("Grandma").unwrap();
-
-        let (invite, _) = family
-            .create_invite_at(
-                owner_id,
-                Role::Other,
-                perms,
-                Some(relationship.clone()),
-                InviteTtl::from_hours(48).unwrap(),
-                t0(),
-            )
-            .unwrap();
+        let expected_perms = [Permission::ViewBudget, Permission::RecordOwnTransactions];
+        let rel = Relationship::try_new("Grandma").unwrap();
+        let invite = create_invite(&mut family, owner_id, Role::Other, perms, Some(rel.clone()));
         assert_eq!(invite.created_by(), owner_member_id);
-        assert_eq!(invite.permissions(), expected_perms.as_slice());
-        assert_eq!(invite.relationship(), Some(&relationship));
+        assert_eq!(invite.permissions(), &expected_perms);
+        assert_eq!(invite.relationship(), Some(&rel));
 
+        let name = MemberDisplayName::try_new("Elena").unwrap();
         let (member, _) = family
             .accept_invite_at(
                 invite.token(),
                 UserId::new_v4(),
-                DisplayName::try_new("Elena").unwrap(),
+                name,
                 t0() + chrono::Duration::minutes(1),
             )
             .unwrap();
-        assert_eq!(member.permissions(), expected_perms.as_slice());
-        assert_eq!(member.relationship(), Some(&relationship));
-        assert!(member.has_permission(Permission::ViewBudget));
-        assert!(!member.has_permission(Permission::ViewLoans));
-        assert!(!member.can_access_debt_features());
-        assert!(matches!(
-            member.assert_debt_access(),
-            Err(DomainError::InsufficientRole { role: Role::Other })
-        ));
-        assert!(matches!(
-            member.assert_can_perform(DomainAction::ManageFamily),
-            Err(DomainError::InsufficientRole { role: Role::Other })
-        ));
+        assert_eq!(member.permissions(), &expected_perms);
+        assert_eq!(member.relationship(), Some(&rel));
+        assert_other_member_capabilities(&member);
     }
 
     #[test]
     fn relationship_is_allowed_on_non_other_roles() {
         let (mut family, owner_id) = make_family();
         let relationship = Relationship::try_new("Spouse").unwrap();
-
-        let (invite, _) = family
-            .create_invite_at(
-                owner_id,
-                Role::Member,
-                Vec::new(),
-                Some(relationship.clone()),
-                InviteTtl::from_hours(48).unwrap(),
-                t0(),
-            )
-            .unwrap();
+        let invite = create_invite(
+            &mut family,
+            owner_id,
+            Role::Member,
+            Vec::new(),
+            Some(relationship.clone()),
+        );
         let (member, _) = family
             .accept_invite_at(
                 invite.token(),
                 UserId::new_v4(),
-                DisplayName::try_new("Partner").unwrap(),
+                MemberDisplayName::try_new("Partner").unwrap(),
                 t0() + chrono::Duration::minutes(1),
             )
             .unwrap();
@@ -1073,23 +1015,13 @@ mod tests {
         let (mut family, owner_id) = make_family();
         let bob_id = UserId::new_v4();
         let _bob = invite_and_accept_at(&mut family, owner_id, bob_id, "Bob", Role::Member, t0());
-
-        let (invite, _) = family
-            .create_invite_at(
-                owner_id,
-                Role::Member,
-                Vec::new(),
-                None,
-                InviteTtl::from_hours(48).unwrap(),
-                t0(),
-            )
-            .unwrap();
+        let invite = create_invite(&mut family, owner_id, Role::Member, Vec::new(), None);
 
         let err = family
             .accept_invite_at(
                 invite.token(),
                 bob_id,
-                DisplayName::try_new("Bob Again").unwrap(),
+                MemberDisplayName::try_new("Bob Again").unwrap(),
                 t0() + chrono::Duration::minutes(10),
             )
             .unwrap_err();
@@ -1105,7 +1037,7 @@ mod tests {
         let carol = family.accept_invite_at(
             invite.token(),
             UserId::new_v4(),
-            DisplayName::try_new("Carol").unwrap(),
+            MemberDisplayName::try_new("Carol").unwrap(),
             t0() + chrono::Duration::minutes(15),
         );
         assert!(carol.is_ok());
@@ -1117,7 +1049,6 @@ mod tests {
         let bob_id = UserId::new_v4();
         let bob = invite_and_accept_at(&mut family, owner_id, bob_id, "Bob", Role::Member, t0());
         let original_member_id = bob.id();
-
         family
             .remove_member_at(
                 owner_id,
@@ -1126,22 +1057,14 @@ mod tests {
             )
             .unwrap();
 
-        let (invite, _) = family
-            .create_invite_at(
-                owner_id,
-                Role::Other,
-                vec![Permission::ViewBudget],
-                Some(Relationship::try_new("Sibling").unwrap()),
-                InviteTtl::from_hours(24).unwrap(),
-                t0() + chrono::Duration::hours(2),
-            )
-            .unwrap();
-
+        let rel = Relationship::try_new("Sibling").unwrap();
+        let perms = vec![Permission::ViewBudget];
+        let invite = create_invite(&mut family, owner_id, Role::Other, perms, Some(rel));
         let (rejoined, events) = family
             .accept_invite_at(
                 invite.token(),
                 bob_id,
-                DisplayName::try_new("Robert").unwrap(),
+                MemberDisplayName::try_new("Robert").unwrap(),
                 t0() + chrono::Duration::hours(3),
             )
             .unwrap();
@@ -1160,47 +1083,42 @@ mod tests {
     }
 
     #[test]
-    fn expired_and_unknown_invite_tokens_are_rejected() {
-        let (mut family, owner_id) = make_family();
-        let unknown_err = family
+    fn unknown_invite_token_is_rejected() {
+        let (mut family, _) = make_family();
+        let err = family
             .accept_invite_at(
                 InviteTokenId::new_v4(),
                 UserId::new_v4(),
-                DisplayName::try_new("Carol").unwrap(),
+                MemberDisplayName::try_new("Carol").unwrap(),
                 t0(),
             )
             .unwrap_err();
-        assert_eq!(unknown_err, DomainError::InviteTokenNotFound);
+        assert_eq!(err, DomainError::InviteTokenNotFound);
+    }
 
+    #[test]
+    fn expired_invite_token_is_rejected_at_and_after_boundary() {
+        let (mut family, owner_id) = make_family();
+        let ttl = InviteTtl::from_hours(1).unwrap();
         let (invite, _) = family
-            .create_invite_at(
-                owner_id,
-                Role::Member,
-                Vec::new(),
-                None,
-                InviteTtl::from_hours(1).unwrap(),
-                t0(),
-            )
+            .create_invite_at(owner_id, Role::Member, Vec::new(), None, ttl, t0())
             .unwrap();
+        let carol = MemberDisplayName::try_new("Carol").unwrap();
 
         // Exact boundary expires_at == now is treated as expired
         let exact_err = family
             .accept_invite_at(
                 invite.token(),
                 UserId::new_v4(),
-                DisplayName::try_new("Carol").unwrap(),
+                carol.clone(),
                 invite.expires_at(),
             )
             .unwrap_err();
         assert_eq!(exact_err, DomainError::TokenExpired);
 
+        let after = invite.expires_at() + chrono::Duration::seconds(1);
         let after_err = family
-            .accept_invite_at(
-                invite.token(),
-                UserId::new_v4(),
-                DisplayName::try_new("Carol").unwrap(),
-                invite.expires_at() + chrono::Duration::seconds(1),
-            )
+            .accept_invite_at(invite.token(), UserId::new_v4(), carol, after)
             .unwrap_err();
         assert_eq!(after_err, DomainError::TokenExpired);
     }
@@ -1208,101 +1126,56 @@ mod tests {
     #[test]
     fn used_token_cannot_be_reused() {
         let (mut family, owner_id) = make_family();
-        let (invite, _) = family
-            .create_invite_at(
-                owner_id,
-                Role::Member,
-                Vec::new(),
-                None,
-                InviteTtl::from_hours(48).unwrap(),
-                t0(),
-            )
-            .unwrap();
+        let invite = create_invite(&mut family, owner_id, Role::Member, Vec::new(), None);
 
         family
             .accept_invite_at(
                 invite.token(),
                 UserId::new_v4(),
-                DisplayName::try_new("Bob").unwrap(),
+                MemberDisplayName::try_new("Bob").unwrap(),
                 t0() + chrono::Duration::minutes(1),
             )
             .unwrap();
         let result = family.accept_invite_at(
             invite.token(),
             UserId::new_v4(),
-            DisplayName::try_new("Carol").unwrap(),
+            MemberDisplayName::try_new("Carol").unwrap(),
             t0() + chrono::Duration::minutes(2),
         );
-
         assert!(matches!(result, Err(DomainError::TokenAlreadyUsed)));
     }
 
     #[test]
-    fn soft_deleted_family_blocks_all_mutations() {
-        let (mut family, owner_id) = make_family();
-        let member = invite_and_accept_at(
-            &mut family,
-            owner_id,
-            UserId::new_v4(),
-            "Bob",
-            Role::Member,
-            t0(),
-        );
-        let (pending_invite, _) = family
-            .create_invite_at(
-                owner_id,
-                Role::Child,
-                Vec::new(),
-                None,
-                InviteTtl::from_hours(24).unwrap(),
-                t0(),
-            )
-            .unwrap();
-
-        let deleted_family = Family::reconstitute(FamilyParams {
-            id: family.id(),
-            name: family.name().clone(),
-            home_currency: family.home_currency().clone(),
-            members: family.members().to_vec(),
-            invite_tokens: family.invite_tokens().to_vec(),
-            created_at: family.created_at(),
-            deleted_at: Some(t0() + chrono::Duration::hours(1)),
-        });
+    fn soft_deleted_family_blocks_invite_create_and_accept() {
+        let (mut deleted_family, owner_id, _, pending_token) = make_deleted_family();
         assert!(deleted_family.is_deleted());
 
-        let mut f1 = deleted_family.clone();
-        assert_eq!(
-            f1.create_invite_at(
-                owner_id,
-                Role::Member,
-                Vec::new(),
-                None,
-                InviteTtl::from_hours(1).unwrap(),
-                t0(),
-            )
-            .unwrap_err(),
-            DomainError::FamilyDeleted
-        );
-        assert_eq!(
-            f1.accept_invite_at(
-                pending_invite.token(),
-                UserId::new_v4(),
-                DisplayName::try_new("Carol").unwrap(),
-                t0(),
-            )
-            .unwrap_err(),
-            DomainError::FamilyDeleted
-        );
-        assert_eq!(
-            f1.change_member_role_at(owner_id, member.id(), Role::Child, Vec::new(), t0())
-                .unwrap_err(),
-            DomainError::FamilyDeleted
-        );
-        assert_eq!(
-            f1.remove_member_at(owner_id, member.id(), t0())
-                .unwrap_err(),
-            DomainError::FamilyDeleted
-        );
+        let ttl = InviteTtl::from_hours(1).unwrap();
+        let create_err = deleted_family
+            .create_invite_at(owner_id, Role::Member, Vec::new(), None, ttl, t0())
+            .unwrap_err();
+        assert_eq!(create_err, DomainError::FamilyDeleted);
+
+        let carol = MemberDisplayName::try_new("Carol").unwrap();
+        let accept_err = deleted_family
+            .accept_invite_at(pending_token, UserId::new_v4(), carol, t0())
+            .unwrap_err();
+        assert_eq!(accept_err, DomainError::FamilyDeleted);
+    }
+
+    #[test]
+    fn soft_deleted_family_blocks_role_change_and_removal() {
+        let (mut deleted_family, owner_id, member_id, _) = make_deleted_family();
+
+        let role_err = deleted_family
+            .change_member_role_at(owner_id, member_id, Role::Child, Vec::new(), t0())
+            .unwrap_err();
+        assert_eq!(role_err, DomainError::FamilyDeleted);
+
+        let remove_err = deleted_family
+            .remove_member_at(owner_id, member_id, t0())
+            .unwrap_err();
+        assert_eq!(remove_err, DomainError::FamilyDeleted);
     }
 
     #[test]
@@ -1315,20 +1188,14 @@ mod tests {
     }
 
     #[test]
-    fn non_member_caller_returns_user_not_in_family_and_missing_target_returns_member_not_found() {
-        let (mut family, owner_id) = make_family();
+    fn non_member_caller_returns_user_not_in_family() {
+        let (mut family, _) = make_family();
         let outsider_user_id = UserId::new_v4();
         let unknown_member_id = MemberId::new_v4();
+        let ttl = InviteTtl::from_hours(24).unwrap();
 
         let invite_err = family
-            .create_invite_at(
-                outsider_user_id,
-                Role::Member,
-                Vec::new(),
-                None,
-                InviteTtl::from_hours(24).unwrap(),
-                t0(),
-            )
+            .create_invite_at(outsider_user_id, Role::Member, Vec::new(), None, ttl, t0())
             .unwrap_err();
         assert_eq!(
             invite_err,
@@ -1337,21 +1204,27 @@ mod tests {
             }
         );
 
-        let remove_outsider_err = family
+        let remove_err = family
             .remove_member_at(outsider_user_id, unknown_member_id, t0())
             .unwrap_err();
         assert_eq!(
-            remove_outsider_err,
+            remove_err,
             DomainError::UserNotInFamily {
                 user_id: outsider_user_id
             }
         );
+    }
 
-        let missing_target_err = family
+    #[test]
+    fn missing_target_returns_member_not_found() {
+        let (mut family, owner_id) = make_family();
+        let unknown_member_id = MemberId::new_v4();
+
+        let err = family
             .remove_member_at(owner_id, unknown_member_id, t0())
             .unwrap_err();
         assert_eq!(
-            missing_target_err,
+            err,
             DomainError::MemberNotFound {
                 member_id: unknown_member_id
             }
@@ -1359,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn change_member_role_updates_other_permissions_and_skips_noop_events() {
+    fn change_member_role_rejects_custom_permissions_and_skips_owner_noop() {
         let (mut family, owner_id) = make_family();
         let owner_member_id = family.members()[0].id();
         let bob = invite_and_accept_at(
@@ -1371,13 +1244,11 @@ mod tests {
             t0(),
         );
 
-        // No-op Owner -> Owner emits zero events
         let owner_noop = family
             .change_member_role_at(owner_id, owner_member_id, Role::Owner, Vec::new(), t0())
             .unwrap();
         assert!(owner_noop.is_empty());
 
-        // Custom permissions rejected for non-Other
         let bad_perms = family
             .change_member_role_at(
                 owner_id,
@@ -1388,8 +1259,20 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(bad_perms, DomainError::InvariantViolation { .. }));
+    }
 
-        // Transition Member -> Other with deduplicated permissions
+    #[test]
+    fn change_member_role_updates_other_permissions_and_skips_repeat_noop() {
+        let (mut family, owner_id) = make_family();
+        let bob = invite_and_accept_at(
+            &mut family,
+            owner_id,
+            UserId::new_v4(),
+            "Bob",
+            Role::Member,
+            t0(),
+        );
+
         let events = family
             .change_member_role_at(
                 owner_id,
@@ -1409,7 +1292,6 @@ mod tests {
             }] if permissions == &[Permission::ViewLoans]
         ));
 
-        // Repeat exact same role + permissions emits zero events
         let noop_events = family
             .change_member_role_at(
                 owner_id,
@@ -1479,7 +1361,7 @@ mod tests {
         let owner_id = UserId::new_v4();
         let currency = CurrencyCode::try_new("MDL").unwrap();
         let name = FamilyName::try_new("My Family").unwrap();
-        let owner_name = DisplayName::try_new("Ana").unwrap();
+        let owner_name = MemberDisplayName::try_new("Ana").unwrap();
         let (_, events) =
             Family::create_at(name.clone(), currency.clone(), owner_id, owner_name, t0()).unwrap();
 
@@ -1555,7 +1437,7 @@ mod tests {
             .accept_invite_at(
                 InviteTokenId::new_v4(),
                 UserId::new_v4(),
-                DisplayName::try_new("Wrong").unwrap(),
+                MemberDisplayName::try_new("Wrong").unwrap(),
                 t0() + chrono::Duration::minutes(5),
             )
             .unwrap_err();
@@ -1565,10 +1447,94 @@ mod tests {
             .accept_invite_at(
                 raw_token,
                 UserId::new_v4(),
-                DisplayName::try_new("Bob").unwrap(),
+                MemberDisplayName::try_new("Bob").unwrap(),
                 t0() + chrono::Duration::minutes(5),
             )
             .unwrap();
         assert_eq!(joined.role(), Role::Member);
+    }
+
+    fn t0() -> DateTime<Utc> {
+        DateTime::from_timestamp(1_780_000_000, 0).unwrap()
+    }
+
+    fn make_family() -> (Family, UserId) {
+        let owner_id = UserId::new_v4();
+        let currency = CurrencyCode::try_new("USD").unwrap();
+        let name = FamilyName::try_new("Test Family").unwrap();
+        let owner_name = MemberDisplayName::try_new("Alice").unwrap();
+        let (family, _) = Family::create_at(name, currency, owner_id, owner_name, t0()).unwrap();
+        (family, owner_id)
+    }
+
+    fn create_invite(
+        family: &mut Family,
+        owner_id: UserId,
+        role: Role,
+        permissions: Vec<Permission>,
+        relationship: Option<Relationship>,
+    ) -> InviteToken {
+        let ttl = InviteTtl::from_hours(48).unwrap();
+        let (invite, _) = family
+            .create_invite_at(owner_id, role, permissions, relationship, ttl, t0())
+            .unwrap();
+        invite
+    }
+
+    fn invite_and_accept_at(
+        family: &mut Family,
+        owner_id: UserId,
+        user_id: UserId,
+        name: &str,
+        role: Role,
+        now: DateTime<Utc>,
+    ) -> FamilyMember {
+        let invite = create_invite(family, owner_id, role, Vec::new(), None);
+        let (member, _) = family
+            .accept_invite_at(
+                invite.token(),
+                user_id,
+                MemberDisplayName::try_new(name).unwrap(),
+                now + chrono::Duration::minutes(5),
+            )
+            .unwrap();
+        member
+    }
+
+    fn make_deleted_family() -> (Family, UserId, MemberId, InviteTokenId) {
+        let (mut family, owner_id) = make_family();
+        let member = invite_and_accept_at(
+            &mut family,
+            owner_id,
+            UserId::new_v4(),
+            "Bob",
+            Role::Member,
+            t0(),
+        );
+        let pending = create_invite(&mut family, owner_id, Role::Child, Vec::new(), None);
+        let deleted = Family::reconstitute(FamilyParams {
+            id: family.id(),
+            name: family.name().clone(),
+            home_currency: family.home_currency().clone(),
+            members: family.members().to_vec(),
+            invite_tokens: family.invite_tokens().to_vec(),
+            created_at: family.created_at(),
+            deleted_at: Some(t0() + chrono::Duration::hours(1)),
+        });
+        (deleted, owner_id, member.id(), pending.token())
+    }
+
+    fn assert_other_member_capabilities(member: &FamilyMember) {
+        assert!(member.has_permission(Permission::ViewBudget));
+        assert!(!member.has_permission(Permission::ViewLoans));
+        assert!(!member.can_access_debt_features());
+        assert!(matches!(
+            member.assert_debt_access(),
+            Err(DomainError::InsufficientRole { role: Role::Other })
+        ));
+        assert!(matches!(
+            member.assert_can_perform(DomainAction::ManageFamily),
+            Err(DomainError::InsufficientRole { role: Role::Other })
+        ));
     }
 }

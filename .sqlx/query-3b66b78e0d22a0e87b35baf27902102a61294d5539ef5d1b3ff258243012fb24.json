@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT role, permissions FROM family_members WHERE family_id = $1 AND user_id = $2 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role",
+        "type_info": "Varchar",
+        "origin": {
+          "Table": {
+            "table": "family_members",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "permissions",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "family_members",
+            "name": "permissions"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "3b66b78e0d22a0e87b35baf27902102a61294d5539ef5d1b3ff258243012fb24"
+}

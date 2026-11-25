@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 
-Description: "FamilyLedger — Core serverless infrastructure (Cognito + Google IdP, PreSignUp, API Gateway, S3, CloudFront)"
+Description: "FamilyLedger — Core serverless infrastructure (Cognito + Google IdP, PreSignUp, S3, CloudFront)"
 
 Parameters:
   Environment:
@@ -42,16 +42,6 @@ Parameters:
 Conditions:
   IsDev: !Equals [!Ref Environment, dev]
   HasGoogleIdp: !Not [!Equals [!Ref GoogleClientId, ""]]
-
-Globals:
-  Function:
-    Runtime: provided.al2023
-    Architectures: [arm64]
-    Timeout: 30
-    MemorySize: 256
-    Environment:
-      Variables:
-        ENVIRONMENT: !Ref Environment
 
 Resources:
   # ─── Cognito PreSignUp Safe Account-Linking Lambda ──────────────────────────
@@ -197,31 +187,6 @@ Resources:
       Domain: !Sub "familyledger-${Environment}-${AWS::AccountId}"
       UserPoolId: !Ref FamilyLedgerUserPool
 
-  # ─── API Gateway HTTP API ───────────────────────────────────────────────────
-  FamilyLedgerApi:
-    Type: AWS::Serverless::HttpApi
-    Properties:
-      StageName: !Ref Environment
-      DefaultRouteSettings:
-        ThrottlingBurstLimit: 100
-        ThrottlingRateLimit: 50
-      CorsConfiguration:
-        AllowOrigins:
-          - !If [IsDev, "http://localhost:4200", !Ref "AWS::NoValue"]
-          - !Sub "https://${FamilyLedgerCdn.DomainName}"
-        AllowHeaders: [Content-Type, Authorization, X-Amz-Date, X-Api-Key, X-Family-Id]
-        AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
-        MaxAge: 300
-      Auth:
-        DefaultAuthorizer: CognitoJwtAuthorizer
-        Authorizers:
-          CognitoJwtAuthorizer:
-            IdentitySource: "$request.header.Authorization"
-            JwtConfiguration:
-              Issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${FamilyLedgerUserPool}"
-              Audience:
-                - !Ref FamilyLedgerWebAppClient
-
   # ─── S3 Bucket for Angular SPA ──────────────────────────────────────────────
   FamilyLedgerSpaBucket:
     Type: AWS::S3::Bucket
@@ -337,10 +302,6 @@ Outputs:
     Value: !GetAtt CognitoPreSignUpFunction.Arn
     Export:
       Name: !Sub "${AWS::StackName}-CognitoPreSignUpFunctionArn"
-  ApiGatewayUrl:
-    Value: !Sub "https://${FamilyLedgerApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
-    Export:
-      Name: !Sub "${AWS::StackName}-ApiUrl"
   CloudFrontUrl:
     Value: !Sub "https://${FamilyLedgerCdn.DomainName}"
     Export:

@@ -277,11 +277,9 @@ mod tests {
         assert_eq!(PageLimit::try_new(50).unwrap().query_limit_plus_one(), 51);
 
         let items: Vec<u32> = (1..=3).collect();
-        let page = Page::from_limited_query_result(
-            items,
-            PageLimit::try_new(2).unwrap(),
-            |_| (Utc::now(), Uuid::new_v4()),
-        );
+        let page = Page::from_limited_query_result(items, PageLimit::try_new(2).unwrap(), |_| {
+            (Utc::now(), Uuid::new_v4())
+        });
         assert!(page.has_more);
         assert_eq!(page.items.len(), 2);
     }
