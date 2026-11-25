@@ -9,12 +9,15 @@ CREATE TABLE IF NOT EXISTS recurring_payments (
   is_variable_amount   BOOLEAN       NOT NULL DEFAULT false,
   frequency            VARCHAR(20)   NOT NULL CHECK (frequency IN ('monthly','quarterly','annual','irregular')),
   frequency_config     JSONB         NOT NULL DEFAULT '{}'::jsonb,  -- JSON config
-  payment_account_id   UUID REFERENCES payment_accounts(id),
+  payment_account_id   UUID,
   category_id          UUID          NOT NULL REFERENCES ledger_categories(id),
-  linked_loan_id       UUID REFERENCES debt_loans(id),
+  linked_loan_id       UUID,
   next_due_date        DATE,
   is_active            BOOLEAN       NOT NULL DEFAULT true,
   notes                TEXT,
   created_at           TIMESTAMPTZ   NOT NULL DEFAULT now(),
-  deleted_at           TIMESTAMPTZ
+  deleted_at           TIMESTAMPTZ,
+  UNIQUE (family_id, id),
+  FOREIGN KEY (family_id, payment_account_id) REFERENCES payment_accounts(family_id, id),
+  FOREIGN KEY (family_id, linked_loan_id) REFERENCES debt_loans(family_id, id)
 );

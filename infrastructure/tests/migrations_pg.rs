@@ -84,6 +84,8 @@ async fn postgres_applies_all_34_migrations_idempotently_and_enforces_constraint
     let (family_id, owner_member_id) = seed_family_with_owner(&pool).await?;
     assert_owner_invite_rejected(&pool, family_id, owner_member_id).await?;
     assert_orphan_member_rejected(&pool).await?;
+    assert_cross_tenant_fk_rejected(&pool, family_id, owner_member_id).await?;
+    assert_idempotency_key_scoped_per_family(&pool, family_id, owner_member_id).await?;
     Ok(())
 }
 
@@ -157,10 +159,11 @@ async fn assert_owner_invite_rejected(
     owner_member_id: Uuid,
 ) -> Result<()> {
     let res = sqlx::query(
-        "INSERT INTO family_invite_tokens (token, family_id, role, created_by, expires_at) \
-         VALUES ($1, $2, 'owner', $3, now() + interval '1 day')",
+        "INSERT INTO family_invite_tokens (id, token_hash, family_id, role, created_by, expires_at) \
+         VALUES ($1, $2, $3, 'owner', $4, now() + interval '1 day')",
     )
     .bind(Uuid::new_v4())
+    .bind("a".repeat(64))
     .bind(family_id)
     .bind(owner_member_id)
     .execute(pool)
@@ -187,6 +190,110 @@ async fn assert_orphan_member_rejected(pool: &PgPool) -> Result<()> {
     assert!(
         res.is_err(),
         "unknown family_id must violate FOREIGN KEY constraint"
+    );
+    Ok(())
+}
+
+async fn assert_cross_tenant_fk_rejected(
+    pool: &PgPool,
+    family_a_id: Uuid,
+    owner_a_member_id: Uuid,
+) -> Result<()> {
+    let family_b_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO family_families (id, name, home_currency) VALUES ($1, $2, $3)")
+        .bind(family_b_id)
+        .bind("Second Family")
+        .bind("EUR")
+        .execute(pool)
+        .await?;
+
+    let res = sqlx::query(
+        "INSERT INTO payment_accounts (id, family_id, owner_member_id, name, kind, currency) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(family_b_id)
+    .bind(owner_a_member_id)
+    .bind("Cross Tenant Account")
+    .bind("cash")
+    .bind("EUR")
+    .execute(pool)
+    .await;
+    assert!(
+        res.is_err(),
+        "cross-tenant owner_member_id reference must violate composite FOREIGN KEY"
+    );
+
+    let acct_a_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO payment_accounts (id, family_id, owner_member_id, name, kind, currency) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(acct_a_id)
+    .bind(family_a_id)
+    .bind(owner_a_member_id)
+    .bind("Family A Cash")
+    .bind("cash")
+    .bind("USD")
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn assert_idempotency_key_scoped_per_family(
+    pool: &PgPool,
+    family_a_id: Uuid,
+    owner_a_member_id: Uuid,
+) -> Result<()> {
+    let shared_key = Uuid::new_v4();
+    let family_c_id = Uuid::new_v4();
+    let member_c_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO family_families (id, name, home_currency) VALUES ($1, $2, $3)")
+        .bind(family_c_id)
+        .bind("Third Family")
+        .bind("USD")
+        .execute(pool)
+        .await?;
+    sqlx::query(
+        "INSERT INTO family_members (id, family_id, user_id, display_name, role) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(member_c_id)
+    .bind(family_c_id)
+    .bind(Uuid::new_v4())
+    .bind("Charlie")
+    .bind("owner")
+    .execute(pool)
+    .await?;
+
+    for (fam_id, rec_by) in [(family_a_id, owner_a_member_id), (family_c_id, member_c_id)] {
+        sqlx::query(
+            "INSERT INTO ledger_transactions \
+             (id, family_id, recorded_by, kind, amount_value, amount_currency, occurred_at, idempotency_key) \
+             VALUES ($1, $2, $3, 'expense', 10.00, 'USD', now(), $4)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(fam_id)
+        .bind(rec_by)
+        .bind(shared_key)
+        .execute(pool)
+        .await?;
+    }
+
+    let dup_same_family = sqlx::query(
+        "INSERT INTO ledger_transactions \
+         (id, family_id, recorded_by, kind, amount_value, amount_currency, occurred_at, idempotency_key) \
+         VALUES ($1, $2, $3, 'expense', 10.00, 'USD', now(), $4)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(family_a_id)
+    .bind(owner_a_member_id)
+    .bind(shared_key)
+    .execute(pool)
+    .await;
+    assert!(
+        dup_same_family.is_err(),
+        "duplicate idempotency_key within same family must be rejected"
     );
     Ok(())
 }

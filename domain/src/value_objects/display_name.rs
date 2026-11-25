@@ -23,7 +23,11 @@ use nutype::nutype;
 
 #[nutype(
     sanitize(trim),
-    validate(not_empty, len_char_max = 100),
+    validate(
+        not_empty,
+        len_char_max = 100,
+        predicate = crate::value_objects::is_safe_display_text
+    ),
     derive(
         Debug,
         Clone,
@@ -83,5 +87,19 @@ mod tests {
     fn exactly_100_chars_is_accepted() {
         let at_limit = "a".repeat(100);
         assert!(DisplayName::try_new(at_limit).is_ok());
+    }
+
+    #[test]
+    fn control_chars_and_bidi_overrides_are_rejected() {
+        for bad in [
+            "Alice\0",
+            "Alice\nBob",
+            "Alice\rBob",
+            "Alice\x1b[0m",
+            "Alice\u{202E}boB",
+            "Alice\u{200F}Bob",
+        ] {
+            assert!(DisplayName::try_new(bad).is_err());
+        }
     }
 }

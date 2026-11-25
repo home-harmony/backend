@@ -17,10 +17,15 @@ This directory contains Infrastructure-as-Code (IaC) templates for AWS SAM:
 Amazon Cognito does not support removing custom schema attributes (`family_id`, `family_role`) in-place via CloudFormation update. After removing the legacy `Schema` block (ADR-0011) and adding `X-Family-Id` to API Gateway CORS `AllowHeaders`, recreate the core stack cleanly:
 
 ```powershell
-# 1. Delete existing core stack
+# 1. Build the ARM64 Cognito PreSignUp Lambda binary (required by template.yaml)
+cd ../..
+cargo lambda build --release --arm64 --package cognito_pre_signup
+cd infrastructure/sam
+
+# 2. Delete existing core stack
 sam delete --stack-name familyledger-core-dev --region us-east-1 --no-prompts
 
-# 2. Deploy clean stack (generates fresh Cognito User Pool & App Client IDs)
+# 3. Deploy clean stack (pass GoogleClientId / GoogleClientSecret via CLI overrides if enabling Google Sign-In)
 sam deploy --config-file samconfig.toml
 ```
 

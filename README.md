@@ -39,10 +39,12 @@ backend/
 │       └── migrations_pg.rs    # Docker PostgreSQL 16 integration test (#[ignore])
 ├── api/                        # Shared Axum middleware, auth extraction, RFC 9457 error mapping
 │   └── src/
-│       ├── auth.rs             # AuthClaims extractor (user_id, optional email, verified X-Family-Id)
+│       ├── auth.rs             # Sealed AuthClaims & AuthenticatedUser (API Gateway + LocalJwtVerifier)
 │       ├── errors.rs           # DomainError & AuthError -> RFC 9457 application/problem+json
-│       └── response.rs         # Standard response helpers
+│       └── response.rs         # Standard JSON response helpers + security header layers
 └── lambdas/
+    ├── cognito_pre_signup/     # Lambda: Cognito PreSignUp safe Google linking & takeover guard
+    │   └── src/main.rs
     └── migrate_runner/         # Lambda: applies SQL migrations at deploy time
         └── src/main.rs
 ```
@@ -84,7 +86,44 @@ cargo lambda build --release --arm64
 
 # Prepare SQLx offline query cache (for CI without a live DB)
 cargo sqlx prepare --workspace -- --all-targets
+
+# Run dependency advisory audit (requires cargo-audit installed)
+cargo audit
 ```
+
+### Post-Pull Verification Checklist (Machine with Docker, AWS SAM CLI & `cargo-lambda`)
+
+Run these steps after `git pull` on your full-toolchain machine before deploying:
+
+1. **Step A — Rust Lints, Unit Tests & Spec Traceability**:
+   ```bash
+   cd backend
+   cargo clippy --workspace --all-targets -- -D warnings
+   cargo test --workspace
+   ```
+2. **Step B — Docker PostgreSQL 16 Schema, Composite FK & Scoped Idempotency Integration Test** *(requires Docker active)*:
+   ```bash
+   cargo test -p infrastructure --test migrations_pg -- --ignored --nocapture
+   ```
+3. **Step C — Dependency Vulnerability Audit**:
+   ```bash
+   cargo audit
+   ```
+4. **Step D — AWS SAM Template Validation & Linting (`cfn-lint`)**:
+   ```bash
+   cd infrastructure/sam
+   sam validate -t template.yaml --lint
+   sam validate -t data-stream-template.yaml --lint
+   ```
+5. **Step E — Cross-Compile Both ARM64 Lambda Binaries (`provided.al2023`)**:
+   ```bash
+   cd ../..
+   cargo lambda build --release --arm64 --package migrate_runner
+   cargo lambda build --release --arm64 --package cognito_pre_signup
+   ```
+6. **Step F — (Optional) Deploy & Verify Against Live Aurora DSQL**:
+   - If an existing dev Aurora DSQL cluster has the old 34 migrations applied, reset/recreate the cluster (or drop the old tables + `_sqlx_migrations`) because baseline migrations `02`–`05`, `07`, `09`–`10`, `12`–`17` were updated in-place.
+   - Deploy `familyledger-core-dev` and `familyledger-data-dev`, then invoke `familyledger-migrate-dev` and verify `"applied_now": 34, "active_async_jobs": 0`.
 
 ## Non-Negotiable Rules
 

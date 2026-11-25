@@ -1,5 +1,5 @@
 [workspace]
-members = ["domain", "infrastructure", "api", "lambdas/migrate_runner"]
+members = ["domain", "infrastructure", "api", "lambdas/migrate_runner", "lambdas/cognito_pre_signup"]
 resolver = "2"
 
 [workspace.package]
@@ -45,11 +45,16 @@ chrono = { version = "0.4.45", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 
-# ─── HTTP / Lambda ───────────────────────────────────────────────────
+# ─── HTTP / Lambda / AWS SDK ─────────────────────────────────────────────────
 axum = { version = "0.8.9", features = ["macros"] }
 lambda_runtime = "1.5.0"
+lambda_http = { version = "1.3.2", default-features = false, features = ["apigw_http"] }
+aws_lambda_events = { version = "1.2.0", default-features = false, features = ["cognito"] }
+aws-config = "1.11.0"
+aws-sdk-cognitoidentityprovider = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 tower = "0.5.3"
-# Note: `lambda_http`, `tower-http`, and `jsonwebtoken` will be re-added when Sprint 2 HTTP/JWT middleware lands.
+tower-http = { version = "0.6.11", features = ["set-header"] }
+jsonwebtoken = { version = "10.4.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 
 # ─── Observability ───────────────────────────────────────────────────
 tracing = "0.1.44"
@@ -65,6 +70,7 @@ base64 = "0.23.1"
 # ─── Value objects (strongly-typed primitives with built-in validation) ─────────
 nutype = { version = "0.8.0", features = ["serde"] }
 email_address = { version = "0.2.9", default-features = false }
+sha2 = { version = "0.10.9", default-features = false }
 
 # ─── Testing ─────────────────────────────────────────────────────────────────
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }

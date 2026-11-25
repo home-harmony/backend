@@ -212,7 +212,7 @@ impl TryFrom<&str> for Role {
             "child" => Ok(Role::Child),
             "other" => Ok(Role::Other),
             _ => Err(DomainError::InvariantViolation {
-                message: format!("Unknown role: '{}'", value),
+                message: "Unknown role value".to_string(),
             }),
         }
     }

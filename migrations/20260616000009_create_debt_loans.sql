@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS debt_loans (
   name                  VARCHAR(200)  NOT NULL,
   lender                VARCHAR(200),
   loan_kind_id          UUID          NOT NULL REFERENCES debt_loan_kinds(id),
-  linked_account_id     UUID REFERENCES payment_accounts(id),
+  linked_account_id     UUID,
   principal_value       NUMERIC(19,4) NOT NULL,
   principal_currency    CHAR(3)       NOT NULL,
   balance_value         NUMERIC(19,4) NOT NULL,
@@ -18,5 +18,7 @@ CREATE TABLE IF NOT EXISTS debt_loans (
   expected_payoff_date  DATE,
   status                VARCHAR(20)   NOT NULL DEFAULT 'active' CHECK (status IN ('active','paid_off','paused')),
   created_at            TIMESTAMPTZ   NOT NULL DEFAULT now(),
-  deleted_at            TIMESTAMPTZ
+  deleted_at            TIMESTAMPTZ,
+  UNIQUE (family_id, id),
+  FOREIGN KEY (family_id, linked_account_id) REFERENCES payment_accounts(family_id, id)
 );

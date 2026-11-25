@@ -50,7 +50,11 @@ impl IntoResponse for ApiError {
         let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         (
             status,
-            [(header::CONTENT_TYPE, PROBLEM_JSON_CONTENT_TYPE)],
+            [
+                (header::CONTENT_TYPE, PROBLEM_JSON_CONTENT_TYPE),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
             Json(self),
         )
             .into_response()

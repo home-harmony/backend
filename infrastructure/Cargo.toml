@@ -6,6 +6,8 @@ license.workspace = true
 description = "FamilyLedger — database repositories, external service adapters, and I/O wrappers."
 
 [dependencies]
+domain = { path = "../domain" }
+
 # ── Database ───────────────────────────────────────────────────────────────────
 sqlx = { workspace = true }
 aurora-dsql-sqlx-connector = { workspace = true }

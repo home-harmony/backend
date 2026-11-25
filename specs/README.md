@@ -20,7 +20,8 @@ Prefixes are 2–4 uppercase ASCII letters, globally unique across all specifica
 | `LD` | Ledger Immutability & Amendments *(Planned)* | `domain` | `T` (Table) | `domain/ledger-immutability.md` | `domain/tests/ld_ledger_immutability.rs` |
 | `LN` | Loans, Payment Splits & Debt Optimizers *(Planned)* | `domain` | `T` / `P` | `domain/loan-repayment.md` | `domain/tests/ln_loan_repayment.rs` |
 | `BG` | Monthly Budget Draft & Owner Approval *(Planned)* | `api` | `U` (Use Case) | `api/budget-approval.md` | `api/tests/bg_budget_approval.rs` |
-| `AU` | Cognito JWT & `X-Family-Id` Isolation *(Planned)* | `api` | `U` (Use Case) | `api/multi-family-auth.md` | `api/tests/au_multi_family_auth.rs` |
+| `AU` | Cognito JWT & `X-Family-Id` Isolation | `api` | `U` (Use Case) | [`api/multi-family-auth.md`](./api/multi-family-auth.md) | `api/tests/au_multi_family_auth.rs` |
+| `IDP` | Cognito `PreSignUp` & Google Account Linking | `api` | `T` (Table) | [`api/cognito-account-linking.md`](./api/cognito-account-linking.md) | `lambdas/cognito_pre_signup/tests/idp_account_linking.rs` |
 
 ---
 

@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 
-Description: "FamilyLedger — Core serverless infrastructure (Cognito, API Gateway, S3, CloudFront)"
+Description: "FamilyLedger — Core serverless infrastructure (Cognito + Google IdP, PreSignUp, API Gateway, S3, CloudFront)"
 
 Parameters:
   Environment:
@@ -13,12 +13,35 @@ Parameters:
   CognitoCallbackUrl:
     Type: String
     Default: http://localhost:4200/auth/callback
-    Description: URL that Cognito redirects to after login.
+    AllowedPattern: "^(https://.+|http://localhost:4200/.*)$"
+    Description: URL that Cognito redirects to after login (HTTPS required outside local dev).
 
   CognitoLogoutUrl:
     Type: String
     Default: http://localhost:4200/auth/logout
-    Description: URL that Cognito redirects to after logout.
+    AllowedPattern: "^(https://.+|http://localhost:4200/.*)$"
+    Description: URL that Cognito redirects to after logout (HTTPS required outside local dev).
+
+  GoogleClientId:
+    Type: String
+    Default: ""
+    Description: Optional Google OAuth 2.0 Web Client ID for Cognito federation (leave empty to disable Google IdP).
+
+  GoogleClientSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: Optional Google OAuth 2.0 Web Client Secret (never commit to git or samconfig).
+
+  CognitoAdvancedSecurityMode:
+    Type: String
+    Default: AUDIT
+    AllowedValues: [OFF, AUDIT, ENFORCED]
+    Description: Cognito threat protection mode (AUDIT in dev; ENFORCED recommended for prod).
+
+Conditions:
+  IsDev: !Equals [!Ref Environment, dev]
+  HasGoogleIdp: !Not [!Equals [!Ref GoogleClientId, ""]]
 
 Globals:
   Function:
@@ -31,6 +54,62 @@ Globals:
         ENVIRONMENT: !Ref Environment
 
 Resources:
+  # ─── Cognito PreSignUp Safe Account-Linking Lambda ──────────────────────────
+  CognitoPreSignUpRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "familyledger-cognito-pre-signup-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CognitoPreSignUpUserPoolAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: "AllowScopedCognitoAccountLinking"
+                Effect: Allow
+                Action:
+                  - cognito-idp:ListUsers
+                  - cognito-idp:AdminLinkProviderForUser
+                  - cognito-idp:AdminDeleteUser
+                Resource:
+                  - !Sub "arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*"
+                Condition:
+                  StringEquals:
+                    "aws:ResourceTag/Project": "FamilyLedger"
+                    "aws:ResourceTag/Environment": !Ref Environment
+
+  CognitoPreSignUpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "familyledger-cognito-pre-signup-${Environment}"
+      Description: "Safe Google OAuth PreSignUp account linking and takeover stub cleanup"
+      CodeUri: ../../target/lambda/cognito_pre_signup/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Architectures: [arm64]
+      Role: !GetAtt CognitoPreSignUpRole.Arn
+      MemorySize: 128
+      Timeout: 10
+      Environment:
+        Variables:
+          RUST_LOG: info
+
+  CognitoPreSignUpInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CognitoPreSignUpFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt FamilyLedgerUserPool.Arn
+
   # ─── Cognito User Pool ───────────────────────────────────────────────────────
   FamilyLedgerUserPool:
     Type: AWS::Cognito::UserPool
@@ -38,6 +117,13 @@ Resources:
       UserPoolName: !Sub "familyledger-users-${Environment}"
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
       Policies:
         PasswordPolicy:
           MinimumLength: 12
@@ -50,7 +136,29 @@ Resources:
         EmailSubject: "Your FamilyLedger verification code"
         EmailMessage: "Your verification code is {####}"
       UserPoolAddOns:
-        AdvancedSecurityMode: AUDIT
+        AdvancedSecurityMode: !Ref CognitoAdvancedSecurityMode
+      LambdaConfig:
+        PreSignUp: !GetAtt CognitoPreSignUpFunction.Arn
+      UserPoolTags:
+        Environment: !Ref Environment
+        Project: FamilyLedger
+
+  # ─── Google OIDC Identity Provider (Optional) ───────────────────────────────
+  FamilyLedgerGoogleIdp:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Condition: HasGoogleIdp
+    Properties:
+      UserPoolId: !Ref FamilyLedgerUserPool
+      ProviderName: Google
+      ProviderType: Google
+      ProviderDetails:
+        client_id: !Ref GoogleClientId
+        client_secret: !Ref GoogleClientSecret
+        authorize_scopes: "openid email profile"
+      AttributeMapping:
+        email: email
+        email_verified: email_verified
+        name: name
 
   # ─── Cognito App Client ─────────────────────────────────────────────────────
   FamilyLedgerWebAppClient:
@@ -59,6 +167,12 @@ Resources:
       ClientName: !Sub "familyledger-web-${Environment}"
       UserPoolId: !Ref FamilyLedgerUserPool
       GenerateSecret: false
+      SupportedIdentityProviders: !If
+        - HasGoogleIdp
+        - [COGNITO, !Ref FamilyLedgerGoogleIdp]
+        - [COGNITO]
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
       AllowedOAuthFlows: [code]
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthScopes: [openid, email, profile]
@@ -88,9 +202,12 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: !Ref Environment
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 100
+        ThrottlingRateLimit: 50
       CorsConfiguration:
         AllowOrigins:
-          - "http://localhost:4200"
+          - !If [IsDev, "http://localhost:4200", !Ref "AWS::NoValue"]
           - !Sub "https://${FamilyLedgerCdn.DomainName}"
         AllowHeaders: [Content-Type, Authorization, X-Amz-Date, X-Api-Key, X-Family-Id]
         AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
@@ -122,7 +239,7 @@ Resources:
       VersioningConfiguration:
         Status: Enabled
 
-  # ─── CloudFront OAC ─────────────────────────────────────────────────────────
+  # ─── CloudFront OAC & Security Headers ──────────────────────────────────────
   FamilyLedgerCdnOac:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
@@ -132,6 +249,30 @@ Resources:
         OriginAccessControlOriginType: s3
         SigningBehavior: always
         SigningProtocol: sigv4
+
+  FamilyLedgerSecurityHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "familyledger-security-headers-${Environment}"
+        Comment: "Strict security headers for FamilyLedger Angular SPA"
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 63072000
+            IncludeSubdomains: true
+            Preload: true
+            Override: true
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://*.execute-api.*.amazonaws.com https://cognito-idp.*.amazonaws.com https://*.amazoncognito.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: no-referrer
+            Override: true
 
   FamilyLedgerSpaBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -170,6 +311,7 @@ Resources:
           TargetOriginId: S3SpaOrigin
           ViewerProtocolPolicy: redirect-to-https
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref FamilyLedgerSecurityHeadersPolicy
           AllowedMethods: [GET, HEAD, OPTIONS]
           CachedMethods: [GET, HEAD]
         CustomErrorResponses:
@@ -191,6 +333,10 @@ Outputs:
     Value: !Ref FamilyLedgerWebAppClient
     Export:
       Name: !Sub "${AWS::StackName}-CognitoWebClientId"
+  CognitoPreSignUpFunctionArn:
+    Value: !GetAtt CognitoPreSignUpFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-CognitoPreSignUpFunctionArn"
   ApiGatewayUrl:
     Value: !Sub "https://${FamilyLedgerApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
     Export:

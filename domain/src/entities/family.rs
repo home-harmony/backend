@@ -14,15 +14,18 @@
 //! - Invite tokens expire after a bounded positive duration (`<= 30 days`).
 //! - Invite tokens cannot be used more than once or at/after `expires_at`.
 
+use std::fmt;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{
     errors::DomainError,
     events::DomainEvent,
     value_objects::{
-        CurrencyCode, DisplayName, DomainAction, FamilyId, FamilyName, InviteTokenId, InviteTtl,
-        MemberId, Permission, Relationship, Role, UserId,
+        CurrencyCode, DisplayName, DomainAction, FamilyId, FamilyName, InviteId, InviteTokenHash,
+        InviteTokenId, InviteTtl, MemberId, Permission, Relationship, Role, UserId,
     },
 };
 
@@ -52,10 +55,25 @@ pub struct FamilyMemberParams {
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
-/// Parameters for reconstituting a persisted [`InviteToken`] entity.
+/// Parameters for reconstituting a persisted [`InviteToken`] entity from legacy params.
 #[derive(Debug, Clone)]
 pub struct InviteTokenParams {
     pub token: InviteTokenId,
+    pub family_id: FamilyId,
+    pub role: Role,
+    pub permissions: Vec<Permission>,
+    pub relationship: Option<Relationship>,
+    pub created_by: MemberId,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub used: bool,
+}
+
+/// Parameters for reconstituting a persisted [`InviteToken`] entity from hashed DB storage.
+#[derive(Debug, Clone)]
+pub struct HashedInviteTokenParams {
+    pub id: InviteId,
+    pub token_hash: InviteTokenHash,
     pub family_id: FamilyId,
     pub role: Role,
     pub permissions: Vec<Permission>,
@@ -108,10 +126,19 @@ pub struct FamilyMember {
 }
 
 /// A one-time invite token that allows a new user to join the family.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Only `id` and `token_hash` (SHA-256) are persisted or emitted in events;
+/// the raw bearer `token` is retained in-memory only on creation for the caller
+/// and is excluded from `Serialize` and redacted in `Debug`.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct InviteToken {
-    /// UUID v4 — used as PK in database (`family_invite_tokens.token`) and URL token.
-    token: InviteTokenId,
+    /// UUID v4 — database primary key (`family_invite_tokens.id`).
+    id: InviteId,
+    /// SHA-256 hex digest of the bearer secret (`family_invite_tokens.token_hash`).
+    token_hash: InviteTokenHash,
+    /// In-memory bearer secret returned at invite creation; never serialized or persisted.
+    #[serde(skip_serializing, default)]
+    token: Option<InviteTokenId>,
     family_id: FamilyId,
     role: Role,
     /// Custom capability flags (only used when `role == Role::Other`).
@@ -236,29 +263,17 @@ impl Family {
                     operation: "invite expiration",
                 })?;
 
-        let token = InviteTokenId::new_v4();
-        let invite = InviteToken {
-            token,
-            family_id: self.id,
-            role,
-            permissions: permissions.clone(),
-            relationship,
-            created_by: creator_member_id,
-            created_at: now,
-            expires_at,
-            used: false,
-        };
-        self.invite_tokens.push(invite.clone());
-
-        let events = vec![DomainEvent::MemberInvited {
-            family_id: self.id,
-            invite_token: token,
+        let (invite, event) = build_invite_and_event(
+            self.id,
+            creator_member_id,
             role,
             permissions,
-            created_by: creator_member_id,
-            occurred_at: now,
-        }];
-        Ok((invite, events))
+            relationship,
+            now,
+            expires_at,
+        );
+        self.invite_tokens.push(invite.clone());
+        Ok((invite, vec![event]))
     }
 
     /// Accepts an invite token and adds (or reactivates) the user as a member.
@@ -453,7 +468,7 @@ impl Family {
         let invite = self
             .invite_tokens
             .iter_mut()
-            .find(|t| t.token == token)
+            .find(|t| t.token_hash.matches_token(token))
             .ok_or(DomainError::InviteTokenNotFound)?;
 
         if invite.used {
@@ -622,10 +637,12 @@ impl FamilyMember {
 }
 
 impl InviteToken {
-    /// Reconstitutes an `InviteToken` entity from persisted state.
+    /// Reconstitutes an `InviteToken` entity from raw token params (computes `token_hash`).
     pub fn reconstitute(params: InviteTokenParams) -> Self {
         Self {
-            token: params.token,
+            id: InviteId::new_v4(),
+            token_hash: InviteTokenHash::from_token_id(params.token),
+            token: Some(params.token),
             family_id: params.family_id,
             role: params.role,
             permissions: params.permissions,
@@ -637,8 +654,34 @@ impl InviteToken {
         }
     }
 
+    /// Reconstitutes an `InviteToken` entity from hashed DB persistence (without raw token).
+    pub fn reconstitute_hashed(params: HashedInviteTokenParams) -> Self {
+        Self {
+            id: params.id,
+            token_hash: params.token_hash,
+            token: None,
+            family_id: params.family_id,
+            role: params.role,
+            permissions: params.permissions,
+            relationship: params.relationship,
+            created_by: params.created_by,
+            created_at: params.created_at,
+            expires_at: params.expires_at,
+            used: params.used,
+        }
+    }
+
+    pub fn id(&self) -> InviteId {
+        self.id
+    }
+
+    pub fn token_hash(&self) -> &InviteTokenHash {
+        &self.token_hash
+    }
+
     pub fn token(&self) -> InviteTokenId {
         self.token
+            .unwrap_or_else(|| InviteTokenId::from_uuid(Uuid::nil()))
     }
 
     pub fn family_id(&self) -> FamilyId {
@@ -677,6 +720,61 @@ impl InviteToken {
     pub fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
         self.expires_at <= now
     }
+}
+
+impl fmt::Debug for InviteToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InviteToken")
+            .field("id", &self.id)
+            .field("token_hash", &self.token_hash)
+            .field("token", &"[REDACTED]")
+            .field("family_id", &self.family_id)
+            .field("role", &self.role)
+            .field("permissions", &self.permissions)
+            .field("relationship", &self.relationship)
+            .field("created_by", &self.created_by)
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .field("used", &self.used)
+            .finish()
+    }
+}
+
+fn build_invite_and_event(
+    family_id: FamilyId,
+    created_by: MemberId,
+    role: Role,
+    permissions: Vec<Permission>,
+    relationship: Option<Relationship>,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+) -> (InviteToken, DomainEvent) {
+    let invite_id = InviteId::new_v4();
+    let token = InviteTokenId::new_v4();
+    let token_hash = InviteTokenHash::from_token_id(token);
+    let invite = InviteToken {
+        id: invite_id,
+        token_hash: token_hash.clone(),
+        token: Some(token),
+        family_id,
+        role,
+        permissions: permissions.clone(),
+        relationship,
+        created_by,
+        created_at,
+        expires_at,
+        used: false,
+    };
+    let event = DomainEvent::MemberInvited {
+        family_id,
+        invite_id,
+        invite_token_hash: token_hash,
+        role,
+        permissions,
+        created_by,
+        occurred_at: created_at,
+    };
+    (invite, event)
 }
 
 fn build_owner_member(
@@ -1395,5 +1493,82 @@ mod tests {
             } if event_name == &name && event_currency == &currency
         ));
         assert!(matches!(events[1], DomainEvent::MemberJoined { .. }));
+    }
+
+    #[test]
+    fn invite_token_hashes_secret_redacts_debug_and_reconstitutes_from_hash() {
+        let (mut family, owner_id) = make_family();
+        let (invite, events) = family
+            .create_invite_at(
+                owner_id,
+                Role::Member,
+                Vec::new(),
+                None,
+                InviteTtl::from_hours(24).unwrap(),
+                t0(),
+            )
+            .unwrap();
+
+        let raw_token = invite.token();
+        let debug_str = format!("{invite:?}");
+        assert!(debug_str.contains("[REDACTED]"));
+        assert!(!debug_str.contains(&raw_token.to_string()));
+
+        let json_str = serde_json::to_string(&invite).unwrap();
+        assert!(!json_str.contains(&raw_token.to_string()));
+        assert!(json_str.contains(invite.token_hash().as_str()));
+
+        assert!(matches!(
+            events.as_slice(),
+            [DomainEvent::MemberInvited {
+                invite_id,
+                invite_token_hash,
+                ..
+            }] if *invite_id == invite.id() && invite_token_hash == invite.token_hash()
+        ));
+
+        let hashed_only = InviteToken::reconstitute_hashed(HashedInviteTokenParams {
+            id: invite.id(),
+            token_hash: invite.token_hash().clone(),
+            family_id: invite.family_id(),
+            role: invite.role(),
+            permissions: invite.permissions().to_vec(),
+            relationship: invite.relationship().cloned(),
+            created_by: invite.created_by(),
+            created_at: invite.created_at(),
+            expires_at: invite.expires_at(),
+            used: false,
+        });
+        assert_eq!(hashed_only.token(), InviteTokenId::from_uuid(Uuid::nil()));
+
+        let mut rehydrated = Family::reconstitute(FamilyParams {
+            id: family.id(),
+            name: family.name().clone(),
+            home_currency: family.home_currency().clone(),
+            members: family.members().to_vec(),
+            invite_tokens: vec![hashed_only],
+            created_at: family.created_at(),
+            deleted_at: None,
+        });
+
+        let wrong_err = rehydrated
+            .accept_invite_at(
+                InviteTokenId::new_v4(),
+                UserId::new_v4(),
+                DisplayName::try_new("Wrong").unwrap(),
+                t0() + chrono::Duration::minutes(5),
+            )
+            .unwrap_err();
+        assert_eq!(wrong_err, DomainError::InviteTokenNotFound);
+
+        let (joined, _) = rehydrated
+            .accept_invite_at(
+                raw_token,
+                UserId::new_v4(),
+                DisplayName::try_new("Bob").unwrap(),
+                t0() + chrono::Duration::minutes(5),
+            )
+            .unwrap();
+        assert_eq!(joined.role(), Role::Member);
     }
 }

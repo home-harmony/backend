@@ -37,6 +37,11 @@ pub const MAX_PAGE_SIZE: u32 = 50;
 /// Default page size if the client doesn't specify one.
 pub const DEFAULT_PAGE_SIZE: u32 = 20;
 
+/// Validated page size bounded to `1..=MAX_PAGE_SIZE` (`50`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u32")]
+pub struct PageLimit(u32);
+
 /// A pagination cursor holding the sort key of the last seen row.
 ///
 /// Serializes to and deserializes from an opaque URL-safe base64 token on the wire.
@@ -65,6 +70,46 @@ struct CursorPayload {
     timestamp: DateTime<Utc>,
     #[serde(rename = "i")]
     id: Uuid,
+}
+
+impl PageLimit {
+    /// Validates that `limit` is within `1..=MAX_PAGE_SIZE`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `limit == 0` or `limit > MAX_PAGE_SIZE`.
+    pub fn try_new(limit: u32) -> Result<Self> {
+        if limit == 0 || limit > MAX_PAGE_SIZE {
+            anyhow::bail!("Page limit must be between 1 and {MAX_PAGE_SIZE}");
+        }
+        Ok(Self(limit))
+    }
+
+    /// Returns the limit as `usize` for slice/page truncation.
+    #[must_use]
+    pub const fn into_usize(self) -> usize {
+        self.0 as usize
+    }
+
+    /// Returns `limit + 1` as `i64` for SQL `LIMIT` fetch-N+1 queries.
+    #[must_use]
+    pub const fn query_limit_plus_one(self) -> i64 {
+        (self.0 as i64) + 1
+    }
+}
+
+impl Default for PageLimit {
+    fn default() -> Self {
+        Self(DEFAULT_PAGE_SIZE)
+    }
+}
+
+impl TryFrom<u32> for PageLimit {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u32) -> Result<Self> {
+        Self::try_new(value)
+    }
 }
 
 impl PageCursor {
@@ -102,6 +147,15 @@ impl PageCursor {
 }
 
 impl<T: Serialize> Page<T> {
+    /// Builds a [`Page`] using a validated [`PageLimit`] (`1..=50`).
+    pub fn from_limited_query_result(
+        items_plus_one: Vec<T>,
+        limit: PageLimit,
+        cursor_fn: impl Fn(&T) -> (DateTime<Utc>, Uuid),
+    ) -> Self {
+        Self::from_query_result(items_plus_one, limit.into_usize(), cursor_fn)
+    }
+
     /// Creates a `Page` using the "fetch N+1" trick.
     ///
     /// Pass `page_size + 1` items from the DB query. If you get `page_size + 1`
@@ -213,5 +267,22 @@ mod tests {
         let page = Page::from_query_result(items, 20, |_| (Utc::now(), Uuid::new_v4()));
         assert!(!page.has_more);
         assert!(page.next_cursor.is_none());
+    }
+
+    #[test]
+    fn page_limit_enforces_bounds_1_to_50() {
+        assert!(PageLimit::try_new(0).is_err());
+        assert!(PageLimit::try_new(51).is_err());
+        assert_eq!(PageLimit::default().into_usize(), 20);
+        assert_eq!(PageLimit::try_new(50).unwrap().query_limit_plus_one(), 51);
+
+        let items: Vec<u32> = (1..=3).collect();
+        let page = Page::from_limited_query_result(
+            items,
+            PageLimit::try_new(2).unwrap(),
+            |_| (Utc::now(), Uuid::new_v4()),
+        );
+        assert!(page.has_more);
+        assert_eq!(page.items.len(), 2);
     }
 }

@@ -101,6 +101,40 @@ fn table_migrations_match_schema_catalog_and_invite_check() {
         invite_sql.contains("CHECK (role IN ('member','child','other'))"),
         "family_invite_tokens must reject 'owner' invites"
     );
+    assert!(
+        invite_sql.contains("token_hash      CHAR(64)      NOT NULL UNIQUE"),
+        "family_invite_tokens must store SHA-256 token_hash instead of raw token"
+    );
+    assert!(
+        !invite_sql.contains("token           UUID"),
+        "family_invite_tokens must not store raw UUID invite token"
+    );
+
+    for idx in [6usize, 9, 12, 16] {
+        let sql = migrations[idx].sql.as_str();
+        assert!(
+            sql.contains("UNIQUE (family_id, idempotency_key)"),
+            "migration {} must scope idempotency_key uniqueness to (family_id, idempotency_key)",
+            migrations[idx].version
+        );
+        assert!(
+            !sql.contains("idempotency_key             UUID          NOT NULL UNIQUE")
+                && !sql.contains("idempotency_key       UUID          NOT NULL UNIQUE")
+                && !sql.contains("idempotency_key         UUID          NOT NULL UNIQUE"),
+            "migration {} must not declare globally unique idempotency_key",
+            migrations[idx].version
+        );
+    }
+
+    let envelope_sql = migrations[14].sql.as_str();
+    assert!(
+        envelope_sql.contains("family_id           UUID          NOT NULL REFERENCES family_families(id)"),
+        "budget_envelopes must include family_id for tenant isolation"
+    );
+    assert!(
+        envelope_sql.contains("FOREIGN KEY (family_id, budget_id) REFERENCES budget_monthly_budgets(family_id, id)"),
+        "budget_envelopes must enforce same-tenant composite FK to budget_monthly_budgets"
+    );
 }
 
 #[test]

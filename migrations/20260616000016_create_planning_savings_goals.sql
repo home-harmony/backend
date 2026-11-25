@@ -6,10 +6,12 @@ CREATE TABLE IF NOT EXISTS planning_savings_goals (
   target_amount_value NUMERIC(19,4) NOT NULL,
   target_currency     CHAR(3)       NOT NULL,
   target_date         DATE,
-  linked_account_id   UUID REFERENCES payment_accounts(id),
+  linked_account_id   UUID,
   color               VARCHAR(7),
   icon                VARCHAR(50),
   status              VARCHAR(20)   NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress','achieved','cancelled')),
   created_at          TIMESTAMPTZ   NOT NULL DEFAULT now(),
-  deleted_at          TIMESTAMPTZ
+  deleted_at          TIMESTAMPTZ,
+  UNIQUE (family_id, id),
+  FOREIGN KEY (family_id, linked_account_id) REFERENCES payment_accounts(family_id, id)
 );

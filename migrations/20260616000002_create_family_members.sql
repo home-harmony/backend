@@ -9,5 +9,6 @@ CREATE TABLE IF NOT EXISTS family_members (
   relationship    VARCHAR(50),                    -- e.g. 'Grandma', 'Cousin'
   joined_at       TIMESTAMPTZ   NOT NULL DEFAULT now(),
   deleted_at      TIMESTAMPTZ,
-  UNIQUE (family_id, user_id)
+  UNIQUE (family_id, user_id),
+  UNIQUE (family_id, id)
 );

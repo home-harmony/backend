@@ -20,6 +20,7 @@
 | `Email` | `domain::value_objects::Email` | Trimmed, lowercased email address (`<= 254` bytes, unquoted local part, required TLD, no display text or domain literal) |
 | `Relationship` | `domain::value_objects::Relationship` | Validated non-empty trimmed relationship label ($\le 50$ Unicode chars) |
 | `InviteTtl` | `domain::value_objects::InviteTtl` | Bounded positive expiration duration in seconds (`1..=2_592_000`, max 30 days) |
+| `InviteTokenHash` | `domain::value_objects::InviteTokenHash` | Validated 64-char lowercase ASCII hex SHA-256 digest of an `InviteTokenId` |
 | `DomainError` | `domain::errors::DomainError` | Enum variants (`CurrencyMismatch`, `NegativeAmount`, `ArithmeticOverflow`, `InvalidCurrencyCode`, `InvalidFamilyName`, `InvalidDisplayName`, `InvalidEmail`, `InvalidRelationship`, `InvalidInviteTtl`) |
 
 ---
@@ -144,6 +145,29 @@
 - **Boundary Examples**:
   - `1`, `from_days(30)` (`2_592_000`) $\rightarrow$ `Ok`
   - `0`, `-1`, `2_592_001`, `from_days(31)`, `1500ms` $\rightarrow$ `Err`
+
+### VO-11 — Display text value objects reject control characters and Unicode BiDi overrides
+- **Status**: `Draft`
+- **Origin**: `human`
+- **For all**: Input `&str` `raw` passed to `FamilyName::try_new`, `DisplayName::try_new`, or `Relationship::try_new`.
+- **Then**: Construction and JSON deserialization reject strings whose trimmed content contains any `char::is_control()` character or Unicode bidirectional override/isolate formatting character (`U+202A..=U+202E`, `U+2066..=U+2069`, `U+200E`, `U+200F`, `U+061C`) with `PredicateViolated` (converting to `DomainError::InvalidFamilyName` / `InvalidDisplayName` / `InvalidRelationship`). Empty and over-length checks still take precedence (`NotEmptyViolated`, `LenCharMaxViolated`).
+- **Oracle**: Character-level scan after trim for control and BiDi formatting code points.
+- **Boundary Examples**:
+  - `"Alice\0"`, `"Alice\nBob"`, `"Alice\x1b[31m"`, `"Alice\u{202E}boB"` $\rightarrow$ `Err`
+  - `"  Família da Silva  "` $\rightarrow$ `Ok`
+
+### VO-12 — InviteTokenHash computes deterministic 64-char lowercase hex SHA-256 digest
+- **Status**: `Draft`
+- **Origin**: `human`
+- **For all**: `token: InviteTokenId` or raw `&str` hex digest.
+- **Then**:
+  - `InviteTokenHash::from_token_id(token)` returns a deterministic 64-character lowercase ASCII hex SHA-256 digest of `token.to_string().as_bytes()`.
+  - `InviteTokenHash::try_new(raw)` trims whitespace and succeeds iff the trimmed string has length `64` and all characters are lowercase ASCII hex (`'0'..='9' | 'a'..='f'`); uppercase hex, non-hex, or wrong-length strings fail at construction and deserialization.
+  - `hash.matches_token(candidate)` returns `true` iff `InviteTokenHash::from_token_id(candidate) == *hash`.
+- **Oracle**: SHA-256 over canonical UUID hyphenated lowercase string + lowercase hex format predicate.
+- **Boundary Examples**:
+  - `InviteTokenHash::from_token_id(t).as_str().len()` == `64`
+  - 64 `'A'` chars (uppercase), 63 `'a'` chars, 64 `'g'` chars $\rightarrow$ `Err`
 
 ---
 

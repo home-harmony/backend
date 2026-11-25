@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS budget_monthly_budgets (
   status                      VARCHAR(20)   NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active')),
   created_at                  TIMESTAMPTZ   NOT NULL DEFAULT now(),
   approved_at                 TIMESTAMPTZ,
-  approved_by                 UUID REFERENCES family_members(id),
-  UNIQUE (family_id, year_month)
+  approved_by                 UUID,
+  UNIQUE (family_id, year_month),
+  UNIQUE (family_id, id),
+  FOREIGN KEY (family_id, approved_by) REFERENCES family_members(family_id, id)
 );

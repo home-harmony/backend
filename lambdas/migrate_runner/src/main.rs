@@ -34,7 +34,7 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 
 use infrastructure::db::{
     migrations::{DsqlMigrationOptions, MigrationReport, run_dsql_migrations},
-    pool::create_pool_with_max_connections,
+    pool::{PgPool, create_admin_pool},
 };
 
 const MIGRATION_POOL_MAX_CONNECTIONS: u32 = 1;
@@ -75,11 +75,11 @@ async fn main() -> Result<(), Error> {
         .with(fmt::layer().json())
         .init();
 
-    run(service_fn(handler)).await
+    let pg_pool = create_admin_pool(MIGRATION_POOL_MAX_CONNECTIONS).await?;
+    run(service_fn(|event| handler(&pg_pool, event))).await
 }
 
-async fn handler(event: LambdaEvent<Request>) -> Result<Response, Error> {
-    let pg_pool = create_pool_with_max_connections(MIGRATION_POOL_MAX_CONNECTIONS).await?;
+async fn handler(pg_pool: &PgPool, event: LambdaEvent<Request>) -> Result<Response, Error> {
     let options = DsqlMigrationOptions {
         wait_for_indexes: event.payload.wait_for_indexes,
         ..DsqlMigrationOptions::default()
@@ -90,7 +90,7 @@ async fn handler(event: LambdaEvent<Request>) -> Result<Response, Error> {
         "Running Aurora DSQL schema migrations"
     );
 
-    let report = run_dsql_migrations(&pg_pool, options)
+    let report = run_dsql_migrations(pg_pool, options)
         .await
         .context("Migration run failed")?;
 

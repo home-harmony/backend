@@ -47,6 +47,8 @@
 | `FM-20` | `Approved` | `human` | Owner targets active member with `Role::Other` and `[ViewBudget, ViewBudget]` | `change_member_role_at(..., Role::Other, perms, now)` | Deduplicates permissions to `[ViewBudget]`, updates role/permissions, emits `MemberRoleChanged` carrying updated `permissions` |
 | `FM-21` | `Approved` | `human` | Owner targets active member with identical `(role, permissions)` | `change_member_role_at(..., same_role, same_perms, now)` | `Ok(vec![])` (no-op emits zero events) |
 | `FM-22` | `Approved` | `human` | Owner attempts to demote self or promote another member to `Role::Owner` | `change_member_role_at(...)` / `remove_member_at(...)` | `Err(DomainError::CannotRemoveOwner)` on Owner demote/remove; `Err(DomainError::DuplicateOwner)` on promotion |
+| `FM-23` | `Draft` | `human` | Active `Family`, valid `Owner`, non-Owner role, bounded `InviteTtl` | `create_invite_at(...)` | Populates `invite.id(): InviteId` and `invite.token_hash(): &InviteTokenHash` (SHA-256 of `invite.token()`); emits `DomainEvent::MemberInvited` carrying `invite_id` and `invite_token_hash` (never raw `InviteTokenId`) |
+| `FM-24` | `Draft` | `human` | Active `Family` with `InviteToken` reconstituted from hashed DB row (`id`, `token_hash`, `used: false`, unexpired) | `accept_invite_at(presented_token, user_id, name, now)` | Verifies `InviteTokenHash::from_token_id(presented_token) == *invite.token_hash()`, marks invite used, adds/reactivates member, emits `MemberJoined` |
 
 ---
 

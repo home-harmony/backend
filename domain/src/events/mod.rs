@@ -10,7 +10,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::value_objects::{
-    CurrencyCode, FamilyId, FamilyName, InviteTokenId, MemberId, Permission, Role, UserId,
+    CurrencyCode, FamilyId, FamilyName, InviteId, InviteTokenHash, MemberId, Permission, Role,
+    UserId,
 };
 
 /// All domain events emitted across all bounded contexts.
@@ -26,7 +27,8 @@ pub enum DomainEvent {
     },
     MemberInvited {
         family_id: FamilyId,
-        invite_token: InviteTokenId,
+        invite_id: InviteId,
+        invite_token_hash: InviteTokenHash,
         role: Role,
         permissions: Vec<Permission>,
         created_by: MemberId,

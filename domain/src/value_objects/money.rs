@@ -66,7 +66,7 @@ impl Money {
         let amount: Decimal = amount
             .parse()
             .map_err(|_| DomainError::InvariantViolation {
-                message: format!("Cannot parse '{}' as Decimal", amount),
+                message: "Invalid decimal amount format".to_string(),
             })?;
         let currency = CurrencyCode::try_new(currency)?;
         Self::new(amount, currency)

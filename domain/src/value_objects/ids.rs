@@ -197,8 +197,13 @@ define_id_v4!(
 );
 
 define_id_v4!(
+    InviteId,
+    "Primary key identifier for a persisted family invite record (UUID v4)."
+);
+
+define_id_v4!(
     InviteTokenId,
-    "Security token for prospective family members (UUID v4, zero timing leakage)."
+    "Bearer security token for prospective family members (UUID v4, zero timing leakage)."
 );
 
 define_id_v4!(

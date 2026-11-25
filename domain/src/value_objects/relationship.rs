@@ -24,7 +24,11 @@ use nutype::nutype;
 
 #[nutype(
     sanitize(trim),
-    validate(not_empty, len_char_max = 50),
+    validate(
+        not_empty,
+        len_char_max = 50,
+        predicate = crate::value_objects::is_safe_display_text
+    ),
     derive(
         Debug,
         Clone,
@@ -93,5 +97,17 @@ mod tests {
         assert!(serde_json::from_str::<Relationship>("\"\"").is_err());
         assert!(serde_json::from_str::<Relationship>("\"   \"").is_err());
         assert!(serde_json::from_str::<Relationship>(&format!("\"{}\"", "a".repeat(51))).is_err());
+    }
+
+    #[test]
+    fn control_chars_and_bidi_overrides_are_rejected() {
+        for bad in [
+            "Grandma\0",
+            "Grandma\nSpouse",
+            "Grandma\x1b",
+            "Grandma\u{202E}Spouse",
+        ] {
+            assert!(Relationship::try_new(bad).is_err());
+        }
     }
 }

@@ -16,6 +16,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 nutype = { workspace = true }
 email_address = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 rust_decimal_macros = { workspace = true }

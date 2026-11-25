@@ -8,7 +8,7 @@ s3_prefix = "familyledger-data-dev"
 region = "us-east-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_NAMED_IAM"
-parameter_overrides = "Environment=\"dev\" DsqlClusterIdentifier=\"4bublzlvvtnwjpmgtotwrulv7m\""
+parameter_overrides = "Environment=\"dev\" DsqlClusterIdentifier=\"<YOUR_DSQL_CLUSTER_ID>\""
 image_repositories = []
 
 [default.global.parameters]
