@@ -61,7 +61,7 @@ Procedural runbook for authoring migrations in `backend/migrations/` and SQLx re
    Get-Content target\migrate-response.json
    Remove-Item target\migrate-response.json -Force
    ```
-3. **Refresh SQLx Offline Query Cache** (when compile-time `sqlx::query!` macros change; install CLI via `cargo install sqlx-cli@0.9.0 --no-default-features --features postgres,rustls`):
+3. **Refresh SQLx Offline Query Cache** (when compile-time `sqlx::query!` macros change; install CLI via `cargo install sqlx-cli@0.9.1 --no-default-features --features postgres,rustls`):
    ```powershell
    cargo sqlx prepare --workspace -- --all-targets
    ```

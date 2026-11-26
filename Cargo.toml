@@ -23,7 +23,7 @@ license = "MIT"
 tokio = { version = "1.54.1", features = ["full"] }
 
 # ─── Database ────────────────────────────────────────────────────────
-sqlx = { version = "0.9.0", features = [
+sqlx = { version = "0.9.1", features = [
     "postgres",
     "runtime-tokio",
     "tls-rustls-ring",
@@ -57,12 +57,12 @@ axum = { version = "0.8.9", features = ["macros"] }
 lambda_runtime = "1.5.0"
 lambda_http = { version = "1.3.2", default-features = false, features = ["apigw_http", "apigw_rest"] }
 aws_lambda_events = { version = "1.2.0", default-features = false, features = ["cognito"] }
-aws-config = { version = "1.11.0", features = ["behavior-version-latest"] }
-aws-sdk-eventbridge = "1"
-aws-sdk-cognitoidentityprovider = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-config = { version = "1.13.4", features = ["behavior-version-latest"] }
+aws-sdk-eventbridge = "1.131.0"
+aws-sdk-cognitoidentityprovider = { version = "1.153.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 tower = "0.5.3"
-tower-http = { version = "0.6.11", features = ["set-header"] }
-jsonwebtoken = { version = "10.4.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+tower-http = { version = "0.7.1", features = ["set-header"] }
+jsonwebtoken = { version = "12.0.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 
 # ─── Observability ───────────────────────────────────────────────────
 tracing = "0.1.44"
@@ -70,7 +70,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 
 # ─── Error handling ───────────────────────────────────────────────────
 thiserror = "2.0.21"
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 
 # ─── Base64 (cursor encoding for keyset pagination) ────────────────────
 base64 = "0.23.1"
@@ -78,7 +78,7 @@ base64 = "0.23.1"
 # ─── Value objects (strongly-typed primitives with built-in validation) ─────────
 nutype = { version = "0.8.0", features = ["serde"] }
 email_address = { version = "0.2.9", default-features = false }
-sha2 = { version = "0.10.9", default-features = false }
+sha2 = { version = "0.11.2", default-features = false }
 
 # ─── Testing ─────────────────────────────────────────────────────────────────
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
