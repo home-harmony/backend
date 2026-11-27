@@ -15,9 +15,10 @@ Prefixes are 2–4 uppercase ASCII letters, globally unique across all specifica
 
 | Prefix | Domain / Component | Layer | Format | Spec Document | Test Target (`backend/`) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `VO` | Value Objects (`Money`, `CurrencyCode`, `FamilyName`, etc.) | `domain` | `P` (Property) | [`domain/value-objects.md`](./domain/value-objects.md) | `domain/tests/vo_value_objects.rs` |
+| `VO` | Value Objects (`Money`, `SignedMoney`, `PositiveMoney`, `CurrencyCode`, etc.) | `domain` | `P` (Property) | [`domain/value-objects.md`](./domain/value-objects.md) | `domain/tests/vo_value_objects.rs` |
 | `FM` | Family Workspace & RBAC Role Permissions | `domain` | `T` (Table) | [`domain/family-rbac.md`](./domain/family-rbac.md) | `domain/tests/fm_family_rbac.rs` |
-| `LD` | Ledger Immutability & Amendments *(Planned)* | `domain` | `T` (Table) | `domain/ledger-immutability.md` | `domain/tests/ld_ledger_immutability.rs` |
+| `AC` | Payment Accounts, Derived Balances & Snapshots | `domain` | `T` (Table) | [`domain/payment-accounts.md`](./domain/payment-accounts.md) | `domain/tests/ac_payment_accounts.rs` |
+| `LD` | Ledger Categories, Transactions, FX & Amendments | `domain` | `T` (Table) | [`domain/ledger-immutability.md`](./domain/ledger-immutability.md) | `domain/tests/ld_ledger_immutability.rs` |
 | `LN` | Loans, Payment Splits & Debt Optimizers *(Planned)* | `domain` | `T` / `P` | `domain/loan-repayment.md` | `domain/tests/ln_loan_repayment.rs` |
 | `BG` | Monthly Budget Draft & Owner Approval *(Planned)* | `api` | `U` (Use Case) | `api/budget-approval.md` | `api/tests/bg_budget_approval.rs` |
 | `AU` | Cognito JWT & `X-Family-Id` Isolation | `api` | `U` (Use Case) | [`api/multi-family-auth.md`](./api/multi-family-auth.md) | `api/tests/au_multi_family_auth.rs` |

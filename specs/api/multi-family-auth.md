@@ -110,6 +110,24 @@
   - Responses include `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`.
 - **Notes**: Replaces main's pre-merge `AU-01` local-adapter clause and `AU-08` header clause.
 
+### AU-11 — `AuthClaims` resolves caller `member_id` and `GET /profile/families` includes `member_id` and `permissions`
+- **Status**: `Draft`
+- **Origin**: `adr:0011`
+- **Given**: Valid `UserIdentity` with active membership (`MemberId = M`, `Role::Guest`, `permissions = [ViewAllAccounts, RecordOwnTransactions]`) in Family `F`.
+- **When**: Caller invokes `GET /profile/families` (identity-only) and any family-scoped route with `X-Family-Id: F`.
+- **Then**:
+  - `GET /profile/families` returns `200 OK` where the matching workspace entry includes `membership.member_id == M`, `membership.role == "guest"`, and `membership.permissions == ["view_all_accounts", "record_own_transactions"]`.
+  - `family_auth_middleware` populates `AuthClaims.member_id == M` alongside `family_id`, `role`, and `permissions`.
+- **Notes**: Enables zero-extra-roundtrip ownership and permission checks in `accounts_service`, `ledger_service`, and `frontend-web/`.
+
+### AU-12 — `Role::Guest` without account or ledger capability flags receives 403 `INSUFFICIENT_ROLE`
+- **Status**: `Draft`
+- **Origin**: `human`
+- **Given**: Active `Role::Guest` member in Family `F` whose `permissions` is `[Permission::ViewBudget]` (neither `ViewAllAccounts` nor `ManageOwnAccounts`, and none of `ViewAllTransactions`, `RecordOwnTransactions`, `RecordAnyTransaction`).
+- **When**: Caller invokes `GET /accounts`, `POST /accounts`, `GET /categories`, `GET /transactions`, or `POST /transactions` with `X-Family-Id: F`.
+- **Then**: Every call responds with `403 Forbidden`, `Content-Type: application/problem+json`, and `code == "INSUFFICIENT_ROLE"`.
+- **Notes**: Prevents unprivileged `Guest` members from enumerating empty lists on unauthorized bounded contexts.
+
 ---
 
 ## Open Questions

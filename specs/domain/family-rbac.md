@@ -56,6 +56,7 @@
 | `FM-29` | `Approved` | `human` | Active `Family` with concurrent profile update and member removal (`remove_member`) | Concurrent `PUT /families/{id}` and `DELETE /families/{id}/members/{mid}` | Both serialize cleanly without resurrecting the soft-deleted member (`deleted_at` remains set) or reverting the profile update |
 | `FM-30` | `Draft` | `human` | Active `Family`, valid `Owner`, non-Owner role, bounded `InviteTtl` | `create_invite_at(...)` | Populates `invite.id(): InviteId` and `invite.token_hash(): &InviteTokenHash` (SHA-256 of `invite.token()`); emits `DomainEvent::MemberInvited` carrying `invite_id` and `invite_token_hash` (never raw `InviteTokenId`) |
 | `FM-31` | `Draft` | `human` | Active `Family` with `InviteToken` reconstituted from hashed DB row (`id`, `token_hash`, `used: false`, unexpired) | `accept_invite_at(presented_token, user_id, name, now)` | Verifies `InviteTokenHash::from_token_id(presented_token) == *invite.token_hash()`, marks invite used, adds/reactivates member, emits `MemberJoined` |
+| `FM-32` | `Draft` | `human` | Sprint 3 Ubiquitous Language rename (`Role::Other` -> `Role::Guest`, wire `"guest"`) | `Role::try_from`, serde serialize/deserialize, `action_policy`, `Family::create_invite_at`, `Family::change_member_role_at` | `"guest"` round-trips to `Role::Guest` (`"other"` rejected); custom `Permission` flags apply strictly to `Role::Guest` (`FM-05`, `FM-07`, `FM-09`, `FM-10`, `FM-13`, `FM-20` updated simultaneously in `Slice B0`) |
 
 ---
 
