@@ -33,7 +33,7 @@ async fn patch_role_changes_member_to_other_deduplicating_permissions_and_emits_
         Arc::clone(&spy),
     ));
     let uri = format!("/families/{fid}/members/{}/role", roles.member_id);
-    let payload = r#"{"role":"other","permissions":["view_budget","view_reports","view_budget"]}"#;
+    let payload = r#"{"role":"guest","permissions":["view_budget","view_reports","view_budget"]}"#;
 
     let (status, _, body) = send_json(app, patch_req(&uri, roles.owner, &fid, payload)?).await?;
     assert_eq!(status, StatusCode::OK);
@@ -41,7 +41,7 @@ async fn patch_role_changes_member_to_other_deduplicating_permissions_and_emits_
     assert_eq!(body["family_id"], fid);
     assert_eq!(body["user_id"], roles.member.to_string());
     assert_eq!(body["display_name"], "Member");
-    assert_eq!(body["role"], "other");
+    assert_eq!(body["role"], "guest");
     assert_eq!(body["permissions"], json!(["view_budget", "view_reports"]));
     assert!(body["joined_at"].as_str().is_some());
 
@@ -51,7 +51,7 @@ async fn patch_role_changes_member_to_other_deduplicating_permissions_and_emits_
         family_id,
         roles.member_id,
         roles.owner_member_id,
-        (Role::Member, Role::Other),
+        (Role::Member, Role::Guest),
         &expected_perms,
     )
 }
@@ -85,7 +85,7 @@ async fn patch_role_clears_custom_permissions_when_transitioning_other_to_member
         family_id,
         roles.other_all_perms_id,
         roles.owner_member_id,
-        (Role::Other, Role::Member),
+        (Role::Guest, Role::Member),
         &[],
     )
 }
@@ -260,7 +260,7 @@ async fn patch_role_rejects_bad_json_and_unknown_enums_with_400() -> Result<()> 
     let cases = [
         "{bad-json",
         r#"{"role":"admin"}"#,
-        r#"{"role":"other","permissions":["ViewBudget"]}"#,
+        r#"{"role":"guest","permissions":["ViewBudget"]}"#,
     ];
 
     for raw in cases {

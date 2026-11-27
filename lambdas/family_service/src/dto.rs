@@ -117,7 +117,9 @@ pub struct FamilySummaryDto {
 /// Caller's active membership summary in a `GET /profile/families` item.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemberSummaryDto {
+    pub member_id: MemberId,
     pub role: Role,
+    pub permissions: Vec<Permission>,
     pub display_name: MemberDisplayName,
 }
 
@@ -188,7 +190,9 @@ impl From<FamilySummary> for FamilySummaryDto {
 impl From<MemberSummary> for MemberSummaryDto {
     fn from(summary: MemberSummary) -> Self {
         Self {
+            member_id: summary.member_id,
             role: summary.role,
+            permissions: summary.permissions,
             display_name: summary.display_name,
         }
     }

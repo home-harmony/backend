@@ -285,7 +285,9 @@ async fn get_profile_families_returns_only_callers_active_families() -> Result<(
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["family"]["name"], "Family One");
     assert_eq!(items[0]["family"]["home_currency"], "USD");
+    assert!(items[0]["membership"]["member_id"].as_str().is_some());
     assert_eq!(items[0]["membership"]["role"], "owner");
+    assert_eq!(items[0]["membership"]["permissions"], json!([]));
     assert_eq!(items[0]["membership"]["display_name"], "Alice A");
     assert_eq!(items[1]["family"]["name"], "Family Two");
     assert_eq!(items[1]["family"]["home_currency"], "EUR");

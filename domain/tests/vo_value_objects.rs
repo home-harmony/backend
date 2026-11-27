@@ -1,19 +1,27 @@
-//! Blind conformance tests for `backend/specs/domain/value-objects.md` (`VO-01`..`VO-10`).
+//! Blind conformance tests for `backend/specs/domain/value-objects.md` (`VO-01`..`VO-18`).
 
-use chrono::Duration;
+use chrono::{Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
 use domain::errors::DomainError;
+use domain::value_objects::account_fields::{AccountNameError, BankNameError, LastFourError};
 use domain::value_objects::currency_code::CurrencyCodeError;
 use domain::value_objects::email::EmailError;
 use domain::value_objects::family_name::FamilyNameError;
+use domain::value_objects::hex_color::HexColorError;
 use domain::value_objects::invite_ttl::InviteTtlError;
+use domain::value_objects::ledger_fields::{
+    CategoryIconError, CategoryNameError, TagError, TransactionDescriptionError,
+    MAX_TAGS_PER_TRANSACTION, validate_tags,
+};
 use domain::value_objects::member_display_name::MemberDisplayNameError;
 use domain::value_objects::relationship::RelationshipError;
 use domain::value_objects::{
-    CurrencyCode, Email, FamilyName, InviteTtl, MAX_INVITE_TTL_SECONDS, MemberDisplayName, Money,
-    Relationship,
+    AccountName, BankName, CategoryIcon, CategoryName, CurrencyCode, Email, FamilyName, HexColor,
+    InviteTokenHash, InviteTokenId, InviteTtl, LastFour, MAX_INVITE_TTL_SECONDS,
+    MemberDisplayName, Money, PositiveMoney, Relationship, SignedMoney, Tag,
+    TransactionDescription, YearMonth,
 };
 
 #[test]
@@ -347,4 +355,155 @@ fn vo_10_invite_ttl_enforces_1_to_30_days_whole_seconds() {
         InviteTtl::try_from_duration(Duration::seconds(2_592_001)),
         Err(DomainError::InvalidInviteTtl { .. })
     ));
+}
+
+#[test]
+fn vo_11_display_text_vos_reject_control_and_bidi_characters() {
+    let ok = "  Família da Silva  ";
+    assert_eq!(FamilyName::try_new(ok).unwrap().as_str(), "Família da Silva");
+    assert_eq!(MemberDisplayName::try_new(ok).unwrap().as_str(), "Família da Silva");
+    assert_eq!(Relationship::try_new(ok).unwrap().as_str(), "Família da Silva");
+
+    for bad in ["Alice\0", "Alice\nBob", "Alice\x1b[31m", "Alice\u{202E}boB", "Alice\u{2066}x"] {
+        assert!(matches!(FamilyName::try_new(bad), Err(FamilyNameError::PredicateViolated)));
+        assert!(matches!(
+            MemberDisplayName::try_new(bad),
+            Err(MemberDisplayNameError::PredicateViolated)
+        ));
+        assert!(matches!(Relationship::try_new(bad), Err(RelationshipError::PredicateViolated)));
+    }
+}
+
+#[test]
+fn vo_12_invite_token_hash_is_64_lowercase_hex_and_matches_token() {
+    let token = InviteTokenId::new_v4();
+    let hash = InviteTokenHash::from_token_id(token);
+    assert_eq!(hash.as_str().len(), 64);
+    assert!(hash.matches_token(token));
+    assert!(!hash.matches_token(InviteTokenId::new_v4()));
+    assert_eq!(hash, InviteTokenHash::try_new(format!("  {}  ", hash.as_str())).unwrap());
+
+    for bad in ["A".repeat(64), "a".repeat(63), "g".repeat(64)] {
+        assert!(matches!(
+            InviteTokenHash::try_new(&bad),
+            Err(DomainError::InvariantViolation { .. })
+        ));
+    }
+}
+
+#[test]
+fn vo_13_signed_money_supports_negative_zero_positive_with_currency_checks() {
+    let usd = CurrencyCode::try_new("USD").unwrap();
+    let eur = CurrencyCode::try_new("EUR").unwrap();
+    let neg = SignedMoney::new(dec!(-120.50), usd.clone());
+    let pos = SignedMoney::new(dec!(20.50), usd.clone());
+    let zero = SignedMoney::zero(usd.clone());
+    assert!(neg.is_negative() && pos.is_positive() && zero.is_zero());
+
+    assert_eq!(neg.add(&pos).unwrap(), SignedMoney::new(dec!(-100.00), usd.clone()));
+    assert_eq!(
+        SignedMoney::new(dec!(10.00), usd.clone())
+            .sub(&SignedMoney::new(dec!(25.00), usd.clone()))
+            .unwrap(),
+        SignedMoney::new(dec!(-15.00), usd.clone())
+    );
+    assert_eq!(neg.negate().unwrap(), SignedMoney::new(dec!(120.50), usd.clone()));
+    assert!(matches!(
+        SignedMoney::new(dec!(-10.00), usd).add(&SignedMoney::new(dec!(10.00), eur)),
+        Err(DomainError::CurrencyMismatch { .. })
+    ));
+    let max_usd = SignedMoney::new(Decimal::MAX, CurrencyCode::try_new("USD").unwrap());
+    let one_usd = SignedMoney::new(dec!(1), CurrencyCode::try_new("USD").unwrap());
+    assert!(matches!(max_usd.add(&one_usd), Err(DomainError::ArithmeticOverflow { .. })));
+    assert!(matches!(
+        SignedMoney::new(Decimal::MIN, CurrencyCode::try_new("USD").unwrap()).sub(&one_usd),
+        Err(DomainError::ArithmeticOverflow { .. })
+    ));
+}
+
+#[test]
+fn vo_14_positive_money_requires_strictly_positive_amounts() {
+    let usd = CurrencyCode::try_new("USD").unwrap();
+    let min_pos = PositiveMoney::new(dec!(0.0001), usd.clone()).unwrap();
+    assert_eq!(min_pos.as_money(), Money::new(dec!(0.0001), usd.clone()).unwrap());
+    let into_money: Money = min_pos.into();
+    assert_eq!(into_money.amount(), dec!(0.0001));
+
+    for non_pos in [dec!(0.00), dec!(-0.01)] {
+        assert_eq!(
+            PositiveMoney::new(non_pos, usd.clone()),
+            Err(DomainError::NonPositiveAmount { amount: non_pos })
+        );
+    }
+    let bad_json = r#"{"amount":"0.00","currency":"USD"}"#;
+    assert!(serde_json::from_str::<PositiveMoney>(bad_json).is_err());
+}
+
+#[test]
+fn vo_15_account_and_bank_names_enforce_bounds_and_hygiene() {
+    assert_eq!(AccountName::try_new(" a ").unwrap().as_str(), "a");
+    assert_eq!(AccountName::try_new("a".repeat(200)).unwrap().as_str().len(), 200);
+    assert!(matches!(AccountName::try_new("   "), Err(AccountNameError::NotEmptyViolated)));
+    assert!(matches!(AccountName::try_new("a".repeat(201)), Err(AccountNameError::LenCharMaxViolated)));
+    assert!(matches!(AccountName::try_new("Card\0"), Err(AccountNameError::PredicateViolated)));
+
+    assert_eq!(BankName::try_new(" b ").unwrap().as_str(), "b");
+    assert_eq!(BankName::try_new("b".repeat(100)).unwrap().as_str().len(), 100);
+    assert!(matches!(BankName::try_new(""), Err(BankNameError::NotEmptyViolated)));
+    assert!(matches!(BankName::try_new("b".repeat(101)), Err(BankNameError::LenCharMaxViolated)));
+    assert!(matches!(BankName::try_new("Bank\u{202E}"), Err(BankNameError::PredicateViolated)));
+}
+
+#[test]
+fn vo_16_last_four_and_hex_color_validate_and_normalize() {
+    assert_eq!(LastFour::try_new(" 0042 ").unwrap().as_str(), "0042");
+    for bad in ["42", "12345", "12a4"] {
+        assert!(matches!(LastFour::try_new(bad), Err(LastFourError::PredicateViolated)));
+    }
+    assert_eq!(HexColor::try_new(" #1a2b3c ").unwrap().as_str(), "#1A2B3C");
+    for bad in ["1A2B3C", "#FFF", "#12345G"] {
+        assert!(matches!(HexColor::try_new(bad), Err(HexColorError::PredicateViolated)));
+    }
+}
+
+#[test]
+fn vo_17_year_month_validates_format_and_leap_end_of_month_utc() {
+    let leap = YearMonth::try_new(" 2024-02 ").unwrap();
+    let expected_leap = Utc.with_ymd_and_hms(2024, 2, 29, 23, 59, 59).unwrap()
+        + Duration::microseconds(999_999);
+    assert_eq!(leap.end_of_month_utc(), expected_leap);
+
+    let non_leap = YearMonth::try_new("2026-02").unwrap();
+    let expected_non_leap = Utc.with_ymd_and_hms(2026, 2, 28, 23, 59, 59).unwrap()
+        + Duration::microseconds(999_999);
+    assert_eq!(non_leap.end_of_month_utc(), expected_non_leap);
+    assert!(Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap() > non_leap.end_of_month_utc());
+
+    for bad in ["2026-00", "2026-13", "26-03", "2026/03"] {
+        assert!(matches!(YearMonth::try_new(bad), Err(DomainError::InvalidYearMonth { .. })));
+    }
+}
+
+#[test]
+fn vo_18_category_tag_and_description_vos_enforce_bounds_hygiene_and_tag_cap() {
+    assert_eq!(CategoryName::try_new("c".repeat(100)).unwrap().as_str().len(), 100);
+    assert!(matches!(CategoryName::try_new("c".repeat(101)), Err(CategoryNameError::LenCharMaxViolated)));
+    assert_eq!(CategoryIcon::try_new("i".repeat(50)).unwrap().as_str().len(), 50);
+    assert!(matches!(CategoryIcon::try_new("i".repeat(51)), Err(CategoryIconError::LenCharMaxViolated)));
+    assert_eq!(Tag::try_new("t".repeat(40)).unwrap().as_str().len(), 40);
+    assert!(matches!(Tag::try_new("t".repeat(41)), Err(TagError::LenCharMaxViolated)));
+    assert_eq!(TransactionDescription::try_new("d".repeat(500)).unwrap().as_str().len(), 500);
+    assert!(matches!(
+        TransactionDescription::try_new("d".repeat(501)),
+        Err(TransactionDescriptionError::LenCharMaxViolated)
+    ));
+    assert!(matches!(
+        TransactionDescription::try_new("note\0"),
+        Err(TransactionDescriptionError::PredicateViolated)
+    ));
+    assert_eq!(MAX_TAGS_PER_TRANSACTION, 20);
+    let twenty_one: Vec<String> = (1..=21).map(|i| format!("tag-{i}")).collect();
+    assert_eq!(validate_tags(&twenty_one), Err(DomainError::TooManyTags { max: 20 }));
+    let dedup = validate_tags([" food ", "food", "groceries"]).unwrap();
+    assert_eq!(dedup.len(), 2);
 }

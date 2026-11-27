@@ -65,7 +65,7 @@ async fn post_invite_deduplicates_other_permissions_trims_relationship_and_uses_
         SpyPublisher::new(),
     );
     let payload = json!({
-        "role": "other",
+        "role": "guest",
         "permissions": ["view_budget", "view_reports", "view_budget"],
         "relationship": "  Grandma  ",
         "ttl_hours": 48
@@ -80,7 +80,7 @@ async fn post_invite_deduplicates_other_permissions_trims_relationship_and_uses_
     )?;
     let (status, _, body) = send_json(app, req).await?;
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(body["role"], "other");
+    assert_eq!(body["role"], "guest");
     assert_eq!(body["permissions"], json!(["view_budget", "view_reports"]));
     assert_eq!(body["relationship"], "Grandma");
     assert_eq!(
@@ -229,7 +229,7 @@ async fn post_invite_rejects_unknown_enums_and_malformed_json_with_400() -> Resu
     let path = format!("/families/{fid}/invites");
     let cases = [
         r#"{"role":"admin"}"#,
-        r#"{"role":"other","permissions":["ViewBudget"]}"#,
+        r#"{"role":"guest","permissions":["ViewBudget"]}"#,
         "{broken-json",
     ];
 
@@ -345,7 +345,7 @@ async fn post_member_accepts_invite_without_family_header_and_emits_member_joine
     assert_eq!(body["family_id"], fid);
     assert_eq!(body["user_id"], newcomer.to_string());
     assert_eq!(body["display_name"], "Charlie");
-    assert_eq!(body["role"], "other");
+    assert_eq!(body["role"], "guest");
     assert_eq!(body["permissions"], json!(["view_budget"]));
     assert_eq!(body["relationship"], "Cousin");
     assert!(body["joined_at"].as_str().is_some());
@@ -409,7 +409,7 @@ async fn post_member_reactivates_soft_deleted_member_preserving_member_id() -> R
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["id"], roles.removed_member_id.to_string());
     assert_eq!(body["display_name"], "Back Again");
-    assert_eq!(body["role"], "other");
+    assert_eq!(body["role"], "guest");
     assert_eq!(body["permissions"], json!(["view_loans"]));
     assert_eq!(body["relationship"], "Aunt");
     Ok(())

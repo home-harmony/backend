@@ -26,7 +26,10 @@ use std::fmt;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::{errors::DomainError, value_objects::CurrencyCode};
+use crate::{
+    errors::DomainError,
+    value_objects::{CurrencyCode, PositiveMoney},
+};
 
 /// A monetary amount with an associated currency.
 ///
@@ -77,6 +80,13 @@ impl Money {
         Self {
             amount: Decimal::ZERO,
             currency,
+        }
+    }
+
+    pub(crate) fn from_positive(positive: &PositiveMoney) -> Self {
+        Self {
+            amount: positive.amount(),
+            currency: positive.currency().clone(),
         }
     }
 

@@ -46,7 +46,7 @@ enum FamilyGivenState {
     CallerNotInFamily,
     UnknownTargetMember,
     SoftDeletedTargetMember,
-    ActiveWithOtherMember,
+    ActiveWithGuestMember,
 }
 
 #[derive(Clone, Copy)]
@@ -61,7 +61,7 @@ enum FamilyRuleAction {
     AcceptExpiredOrMissingOrUsedInvite,
     CreateInviteOwnerRole,
     CreateInviteCustomPerms(Role),
-    ChangeRoleToOtherDuplicatePerms,
+    ChangeRoleToGuestDuplicatePerms,
     ChangeRoleSameRoleSamePerms,
     DemoteSelf,
     RemoveSelf,
@@ -154,7 +154,7 @@ const ROLE_POLICY_TABLE: &[RolePolicyCase] = &[
     },
     RolePolicyCase {
         id: "FM-05",
-        role: Role::Other,
+        role: Role::Guest,
         permissions: &[Permission::ViewLoans],
         action: RolePolicyAction::HasPermission(Permission::ViewLoans),
         expected: RolePolicyExpected::Bool(true),
@@ -168,7 +168,7 @@ const ROLE_POLICY_TABLE: &[RolePolicyCase] = &[
     },
     RolePolicyCase {
         id: "FM-07",
-        role: Role::Other,
+        role: Role::Guest,
         permissions: &[Permission::ViewLoans],
         action: RolePolicyAction::AssertDebtAccess,
         expected: RolePolicyExpected::Ok,
@@ -182,14 +182,14 @@ const ROLE_POLICY_TABLE: &[RolePolicyCase] = &[
     },
     RolePolicyCase {
         id: "FM-09",
-        role: Role::Other,
+        role: Role::Guest,
         permissions: &[],
         action: RolePolicyAction::AssertDebtAccess,
-        expected: RolePolicyExpected::InsufficientRole(Role::Other),
+        expected: RolePolicyExpected::InsufficientRole(Role::Guest),
     },
     RolePolicyCase {
         id: "FM-10",
-        role: Role::Other,
+        role: Role::Guest,
         permissions: &[Permission::ViewLoans],
         action: RolePolicyAction::HasPermission(Permission::ViewBudget),
         expected: RolePolicyExpected::Bool(false),
@@ -224,10 +224,10 @@ const ROLE_POLICY_TABLE: &[RolePolicyCase] = &[
     },
     RolePolicyCase {
         id: "FM-13",
-        role: Role::Other,
+        role: Role::Guest,
         permissions: ALL_EIGHT_PERMS,
         action: RolePolicyAction::AssertFamilyManagement,
-        expected: RolePolicyExpected::InsufficientRole(Role::Other),
+        expected: RolePolicyExpected::InsufficientRole(Role::Guest),
     },
     RolePolicyCase {
         id: "FM-14",
@@ -306,12 +306,12 @@ const FAMILY_RULE_TABLE: &[FamilyRuleCase] = &[
         id: "FM-20",
         given: FamilyGivenState::ActiveWithMember(Role::Member),
         permissions: &[Permission::ViewBudget, Permission::ViewBudget],
-        action: FamilyRuleAction::ChangeRoleToOtherDuplicatePerms,
+        action: FamilyRuleAction::ChangeRoleToGuestDuplicatePerms,
         expected: FamilyRuleExpected::DeduplicatedOtherPermissionsEvent,
     },
     FamilyRuleCase {
         id: "FM-21",
-        given: FamilyGivenState::ActiveWithOtherMember,
+        given: FamilyGivenState::ActiveWithGuestMember,
         permissions: &[Permission::ViewBudget],
         action: FamilyRuleAction::ChangeRoleSameRoleSamePerms,
         expected: FamilyRuleExpected::NoOpZeroEvents,
@@ -472,10 +472,10 @@ const FAMILY_RULE_TABLE: &[FamilyRuleCase] = &[
     },
     FamilyRuleCase {
         id: "FM-27",
-        given: FamilyGivenState::ActiveWithMember(Role::Other),
+        given: FamilyGivenState::ActiveWithMember(Role::Guest),
         permissions: &[],
         action: FamilyRuleAction::UpdateProfileAsNonOwner,
-        expected: FamilyRuleExpected::ErrInsufficientRole(Role::Other),
+        expected: FamilyRuleExpected::ErrInsufficientRole(Role::Guest),
     },
     FamilyRuleCase {
         id: "FM-27",
@@ -555,7 +555,7 @@ fn build_fixture(given: FamilyGivenState) -> Result<FamilyFixture, DomainError> 
     let owner_user_id = UserId::new_v4();
     let (mut family, owner_member_id) = create_test_family(owner_user_id)?;
     let (member_role, member_perms) = match given {
-        FamilyGivenState::ActiveWithOtherMember => (Role::Other, vec![Permission::ViewBudget]),
+        FamilyGivenState::ActiveWithGuestMember => (Role::Guest, vec![Permission::ViewBudget]),
         FamilyGivenState::ActiveWithMember(role) => (role, Vec::new()),
         _ => (Role::Member, Vec::new()),
     };
@@ -671,14 +671,14 @@ fn run_family_rule_case(case: &FamilyRuleCase) -> Result<(), DomainError> {
             FamilyRuleExpected::ReactivatedPreservingMemberId,
         ) => assert_reactivated(case.id, &mut fx, case.permissions, now),
         (
-            FamilyRuleAction::ChangeRoleToOtherDuplicatePerms,
+            FamilyRuleAction::ChangeRoleToGuestDuplicatePerms,
             FamilyRuleExpected::DeduplicatedOtherPermissionsEvent,
         ) => assert_dedup_role_change(case.id, &mut fx, case.permissions, now),
         (FamilyRuleAction::ChangeRoleSameRoleSamePerms, FamilyRuleExpected::NoOpZeroEvents) => {
             let events = fx.family.change_member_role_at(
                 fx.owner_user_id,
                 fx.member_id,
-                Role::Other,
+                Role::Guest,
                 case.permissions.to_vec(),
                 now,
             )?;
@@ -728,7 +728,7 @@ fn assert_reactivated(
     let rel = Relationship::try_new("Grandma")?;
     let (token, _) = fx.family.create_invite_at(
         fx.owner_user_id,
-        Role::Other,
+        Role::Guest,
         perms.to_vec(),
         Some(rel.clone()),
         InviteTtl::from_days(7)?,
@@ -760,7 +760,7 @@ fn assert_dedup_role_change(
     let events = fx.family.change_member_role_at(
         fx.owner_user_id,
         fx.member_id,
-        Role::Other,
+        Role::Guest,
         perms.to_vec(),
         now,
     )?;
@@ -773,7 +773,7 @@ fn assert_dedup_role_change(
     assert!(
         matches!(
             events.as_slice(),
-            [DomainEvent::MemberRoleChanged { new_role: Role::Other, permissions, .. }]
+            [DomainEvent::MemberRoleChanged { new_role: Role::Guest, permissions, .. }]
                 if permissions == &[Permission::ViewBudget]
         ),
         "{id}"
@@ -847,7 +847,7 @@ fn execute_error_action(
         UpdateProfileAsNonOwner => execute_non_owner_profile(fx)?,
         AcceptInviteAsExistingActive
         | AcceptInviteReactivate
-        | ChangeRoleToOtherDuplicatePerms
+        | ChangeRoleToGuestDuplicatePerms
         | ChangeRoleSameRoleSamePerms
         | UpdateProfileAsOwner => panic!("{}: success action reached error executor", case.id),
     };
@@ -1017,4 +1017,114 @@ fn accept_special_invite(
     fx.family
         .accept_invite_at(token_id, UserId::new_v4(), bob, accept_at)
         .map(|_| ())
+}
+
+#[test]
+fn fm_30_create_invite_populates_hash_and_emits_hashed_event() {
+    let mut fx = build_fixture(FamilyGivenState::ActiveWithMember(Role::Member)).unwrap();
+    let now = base_time() + Duration::hours(1);
+    let ttl = InviteTtl::from_days(7).unwrap();
+    let perms = vec![Permission::ViewLoans];
+
+    let (invite, events) = fx
+        .family
+        .create_invite_at(fx.owner_user_id, Role::Guest, perms.clone(), None, ttl, now)
+        .unwrap();
+
+    let expected_hash = domain::value_objects::InviteTokenHash::from_token_id(invite.token());
+    assert_eq!(invite.token_hash(), &expected_hash);
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        DomainEvent::MemberInvited {
+            invite_id,
+            invite_token_hash,
+            role,
+            permissions,
+            ..
+        } => {
+            assert_eq!(*invite_id, invite.id());
+            assert_eq!(invite_token_hash, &expected_hash);
+            assert_eq!(*role, Role::Guest);
+            assert_eq!(permissions, &perms);
+        }
+        other => panic!("FM-30: expected MemberInvited, got {other:?}"),
+    }
+    let event_json = serde_json::to_string(&events[0]).unwrap();
+    assert!(!event_json.contains(&invite.token().to_string()));
+}
+
+#[test]
+fn fm_31_reconstituted_hashed_invite_verifies_presented_token() {
+    let fx = build_fixture(FamilyGivenState::ActiveWithMember(Role::Member)).unwrap();
+    let now = base_time() + Duration::hours(2);
+    let presented = InviteTokenId::new_v4();
+    let invite = InviteToken::reconstitute_hashed(domain::entities::HashedInviteTokenParams {
+        id: domain::value_objects::InviteId::new_v4(),
+        token_hash: domain::value_objects::InviteTokenHash::from_token_id(presented),
+        family_id: fx.family.id(),
+        role: Role::Guest,
+        permissions: vec![Permission::ViewLoans],
+        relationship: None,
+        created_by: fx.owner_member_id,
+        created_at: base_time(),
+        expires_at: now + Duration::days(7),
+        used: false,
+    });
+    let mut fam = Family::reconstitute(domain::entities::FamilyParams {
+        id: fx.family.id(),
+        name: fx.family.name().clone(),
+        home_currency: fx.family.home_currency().clone(),
+        members: fx.family.members().to_vec(),
+        invite_tokens: vec![invite],
+        created_at: fx.family.created_at(),
+        deleted_at: None,
+    });
+    let bob = MemberDisplayName::try_new("Bob").unwrap();
+    let err = fam
+        .accept_invite_at(InviteTokenId::new_v4(), UserId::new_v4(), bob.clone(), now)
+        .unwrap_err();
+    assert_eq!(err, DomainError::InviteTokenNotFound);
+
+    let (member, events) = fam
+        .accept_invite_at(presented, UserId::new_v4(), bob, now)
+        .unwrap();
+    assert_eq!(member.role(), Role::Guest);
+    assert!(fam.invite_tokens().iter().all(InviteToken::is_used));
+    assert!(matches!(events.as_slice(), [DomainEvent::MemberJoined { .. }]));
+}
+
+#[test]
+fn fm_32_guest_role_rename_and_guest_only_custom_permissions() {
+    assert_eq!(Role::try_from("guest").unwrap(), Role::Guest);
+    assert!(Role::try_from("other").is_err());
+    let serialized = serde_json::to_string(&Role::Guest).unwrap();
+    assert_eq!(serialized, "\"guest\"");
+    assert_eq!(serde_json::from_str::<Role>(&serialized).unwrap(), Role::Guest);
+    assert!(serde_json::from_str::<Role>("\"other\"").is_err());
+
+    let loans_only = [Permission::ViewLoans];
+    assert!(Role::Guest.has_permission(&loans_only, Permission::ViewLoans));
+    assert!(!Role::Guest.has_permission(&loans_only, Permission::ViewBudget));
+
+    let mut fx = build_fixture(FamilyGivenState::ActiveWithMember(Role::Member)).unwrap();
+    let now = base_time() + Duration::hours(1);
+    let ttl = InviteTtl::from_days(1).unwrap();
+    let res = fx.family.create_invite_at(
+        fx.owner_user_id,
+        Role::Member,
+        vec![Permission::ViewBudget],
+        None,
+        ttl,
+        now,
+    );
+    assert!(matches!(res, Err(DomainError::InvariantViolation { .. })));
+
+    let ok = fx.family.change_member_role_at(
+        fx.owner_user_id,
+        fx.member_id,
+        Role::Guest,
+        vec![Permission::ViewBudget],
+        now,
+    );
+    assert!(ok.is_ok());
 }

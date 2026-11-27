@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use domain::{
     ports::{MemberAccess, MembershipReader},
-    value_objects::{DomainAction, Email, FamilyId, Permission, Role, UserId},
+    value_objects::{DomainAction, Email, FamilyId, MemberId, Permission, Role, UserId},
 };
 
 use crate::errors::{ApiError, domain_error_response};
@@ -50,6 +50,7 @@ pub struct UserIdentity {
 pub struct AuthClaims {
     pub user_id: UserId,
     pub family_id: FamilyId,
+    pub member_id: MemberId,
     pub role: Role,
     pub permissions: Vec<Permission>,
     #[serde(default)]
@@ -128,6 +129,112 @@ pub const FAMILY_ROUTE_POLICIES: &[RoutePolicy] = &[
         path: "/families/{id}/members/{mid}",
         scope: RouteScope::FamilyScoped {
             required_action: DomainAction::ManageFamily,
+        },
+    },
+];
+
+/// Static policy table governing all Payment Accounts routes (`accounts_service`).
+pub const ACCOUNTS_ROUTE_POLICIES: &[RoutePolicy] = &[
+    RoutePolicy {
+        method: "GET",
+        path: "/accounts",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::AccessAccounts,
+        },
+    },
+    RoutePolicy {
+        method: "POST",
+        path: "/accounts",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::Permission(Permission::ManageOwnAccounts),
+        },
+    },
+    RoutePolicy {
+        method: "GET",
+        path: "/accounts/{id}",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::AccessAccounts,
+        },
+    },
+    RoutePolicy {
+        method: "PUT",
+        path: "/accounts/{id}",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::Permission(Permission::ManageOwnAccounts),
+        },
+    },
+    RoutePolicy {
+        method: "DELETE",
+        path: "/accounts/{id}",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::Permission(Permission::ManageOwnAccounts),
+        },
+    },
+    RoutePolicy {
+        method: "GET",
+        path: "/accounts/{id}/snapshots",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::AccessAccounts,
+        },
+    },
+];
+
+/// Static policy table governing all Ledger & Categories routes (`ledger_service`).
+pub const LEDGER_ROUTE_POLICIES: &[RoutePolicy] = &[
+    RoutePolicy {
+        method: "GET",
+        path: "/categories",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::AccessLedger,
+        },
+    },
+    RoutePolicy {
+        method: "POST",
+        path: "/categories",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::Permission(Permission::RecordAnyTransaction),
+        },
+    },
+    RoutePolicy {
+        method: "PUT",
+        path: "/categories/{id}",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::Permission(Permission::RecordAnyTransaction),
+        },
+    },
+    RoutePolicy {
+        method: "DELETE",
+        path: "/categories/{id}",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::Permission(Permission::RecordAnyTransaction),
+        },
+    },
+    RoutePolicy {
+        method: "GET",
+        path: "/transactions",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::AccessLedger,
+        },
+    },
+    RoutePolicy {
+        method: "POST",
+        path: "/transactions",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::RecordTransactions,
+        },
+    },
+    RoutePolicy {
+        method: "POST",
+        path: "/transactions/{id}/amend",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::RecordTransactions,
+        },
+    },
+    RoutePolicy {
+        method: "DELETE",
+        path: "/transactions/{id}",
+        scope: RouteScope::FamilyScoped {
+            required_action: DomainAction::RecordTransactions,
         },
     },
 ];
@@ -406,6 +513,7 @@ pub fn evaluate_family_access(
     Ok(AuthClaims {
         user_id: identity.user_id,
         family_id,
+        member_id: access.member_id,
         role: access.role,
         permissions: access.permissions.clone(),
         email: identity.email.clone(),
@@ -762,7 +870,7 @@ mod tests {
         let secret = b"test-signing-secret-must-be-long-enough-for-hs256";
         let issuer = "https://cognito-idp.us-east-1.amazonaws.com/pool";
         let verifier = LocalJwtVerifier::new(
-            DecodingKey::from_secret(secret),
+            DecodingKey::from_secret(secret).unwrap(),
             Algorithm::HS256,
             issuer,
             "client-123",
@@ -784,7 +892,7 @@ mod tests {
     #[test]
     fn local_jwt_verifier_rejects_missing_authorization_header() {
         let verifier = LocalJwtVerifier::new(
-            DecodingKey::from_secret(b"secret"),
+            DecodingKey::from_secret(b"secret").unwrap(),
             Algorithm::HS256,
             "iss",
             "client",
@@ -868,6 +976,7 @@ mod tests {
         let mut obj = serde_json::json!({
             "user_id": UserId::new_v4(),
             "family_id": FamilyId::new_v4(),
+            "member_id": MemberId::new_v4(),
             "role": "member",
             "permissions": []
         });
@@ -979,7 +1088,7 @@ mod tests {
         encode(
             &Header::new(Algorithm::HS256),
             &claims,
-            &EncodingKey::from_secret(secret),
+            &EncodingKey::from_secret(secret).unwrap(),
         )
         .unwrap()
     }

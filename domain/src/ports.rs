@@ -2,16 +2,21 @@
 
 use std::future::Future;
 
+use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
+
 use crate::entities::Family;
 use crate::errors::DomainError;
 use crate::events::DomainEvent;
 use crate::value_objects::{
-    CurrencyCode, FamilyId, FamilyName, InviteTokenId, MemberDisplayName, Permission, Role, UserId,
+    AccountId, AccountKind, CurrencyCode, FamilyId, FamilyName, InviteTokenId, MemberDisplayName,
+    MemberId, Permission, PositiveMoney, Role, UserId,
 };
 
 /// Resolved active membership permissions for an authenticated caller in a family.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberAccess {
+    pub member_id: MemberId,
     pub role: Role,
     pub permissions: Vec<Permission>,
 }
@@ -27,7 +32,9 @@ pub struct FamilySummary {
 /// Summary of the caller's active membership in a [`UserFamilySummary`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberSummary {
+    pub member_id: MemberId,
     pub role: Role,
+    pub permissions: Vec<Permission>,
     pub display_name: MemberDisplayName,
 }
 
@@ -114,4 +121,66 @@ pub trait EventPublisher: Send + Sync {
         &self,
         events: &[DomainEvent],
     ) -> impl Future<Output = Result<(), DomainError>> + Send;
+}
+
+/// Read-only account metadata projection consumed by `ledger_service` when validating transactions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountAccess {
+    pub account_id: AccountId,
+    pub owner_member_id: MemberId,
+    pub kind: AccountKind,
+    pub currency: CurrencyCode,
+    pub is_deleted: bool,
+}
+
+/// Read-only active ledger movement projection consumed by `accounts_service` to derive balances.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerMovement {
+    pub occurred_at: DateTime<Utc>,
+    pub source_account_id: Option<AccountId>,
+    pub destination_account_id: Option<AccountId>,
+    pub amount: PositiveMoney,
+    pub destination_amount: Option<PositiveMoney>,
+}
+
+/// Read-only port verifying account existence, ownership, kind, currency, and soft-delete state.
+pub trait AccountAccessReader: Send + Sync {
+    /// Looks up account metadata within `family_id`.
+    fn find_account_access(
+        &self,
+        family_id: FamilyId,
+        account_id: AccountId,
+    ) -> impl Future<Output = Result<Option<AccountAccess>, DomainError>> + Send;
+}
+
+/// Read-only port listing active (`deleted_at IS NULL`) ledger movements affecting an account.
+pub trait AccountLedgerDeltaReader: Send + Sync {
+    /// Returns active movements referencing `account_id` where
+    /// `occurred_at > after_exclusive` (if `Some`) and `occurred_at <= through_inclusive` (if `Some`).
+    fn list_active_movements_after(
+        &self,
+        family_id: FamilyId,
+        account_id: AccountId,
+        after_exclusive: Option<DateTime<Utc>>,
+        through_inclusive: Option<DateTime<Utc>>,
+    ) -> impl Future<Output = Result<Vec<LedgerMovement>, DomainError>> + Send;
+}
+
+/// Read-only port fetching the latest daily exchange rate (`1 quote = rate base`).
+pub trait ExchangeRateReader: Send + Sync {
+    /// Returns the latest rate converting `quote_currency` to `base_currency`, if available.
+    fn find_latest_rate(
+        &self,
+        base_currency: &CurrencyCode,
+        quote_currency: &CurrencyCode,
+    ) -> impl Future<Output = Result<Option<Decimal>, DomainError>> + Send;
+}
+
+/// Read-only port resolving a family workspace's `HomeDisplayCurrency`.
+pub trait FamilyCurrencyReader: Send + Sync {
+    /// Returns the active family's `home_currency` (`None` if missing).
+    fn find_home_currency(
+        &self,
+        family_id: FamilyId,
+    ) -> impl Future<Output = Result<Option<CurrencyCode>, DomainError>> + Send;
 }

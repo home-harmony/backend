@@ -8,7 +8,7 @@
 //! - Soft-deleted families cannot be mutated.
 //! - Active members cannot accept a second invite into the same family; previously
 //!   soft-deleted members are reactivated preserving their `MemberId`.
-//! - Custom [`Permission`] flags can only be configured for [`Role::Other`].
+//! - Custom [`Permission`] flags can only be configured for [`Role::Guest`].
 //! - Member display names cannot be empty or whitespace-only (enforced by [`MemberDisplayName`]).
 //! - Family names cannot be empty or whitespace-only (enforced by [`FamilyName`]).
 //! - Invite tokens expire after a bounded positive duration (`<= 30 days`).
@@ -116,7 +116,7 @@ pub struct FamilyMember {
     /// Validated, trimmed display name (1–100 chars). Enforced by [`MemberDisplayName`].
     display_name: MemberDisplayName,
     role: Role,
-    /// Custom capability flags (only used when `role == Role::Other`).
+    /// Custom capability flags (only used when `role == Role::Guest`).
     permissions: Vec<Permission>,
     /// Optional family relationship label for any member (e.g., "Spouse", "Daughter", "Grandma", "Cousin").
     relationship: Option<Relationship>,
@@ -141,7 +141,7 @@ pub struct InviteToken {
     token: Option<InviteTokenId>,
     family_id: FamilyId,
     role: Role,
-    /// Custom capability flags (only used when `role == Role::Other`).
+    /// Custom capability flags (only used when `role == Role::Guest`).
     permissions: Vec<Permission>,
     /// Optional family relationship label (e.g., "Spouse", "Daughter", "Grandma", "Cousin").
     relationship: Option<Relationship>,
@@ -222,7 +222,7 @@ impl Family {
     /// Creates a new invite token for a prospective member.
     ///
     /// Only `Owner` can invite members, `role` cannot be `Owner`, custom
-    /// `permissions` are allowed only for `Role::Other`, `relationship` is an
+    /// `permissions` are allowed only for `Role::Guest`, `relationship` is an
     /// optional label allowed for any role, and [`InviteTtl`] guarantees a
     /// bounded positive expiration duration.
     pub fn create_invite(
@@ -310,7 +310,7 @@ impl Family {
     ///
     /// Only `Owner` can change roles; the Owner cannot be demoted, no second
     /// member can be promoted to `Owner`, and custom permissions are allowed only
-    /// for `Role::Other`. No-op transitions return an empty event list.
+    /// for `Role::Guest`. No-op transitions return an empty event list.
     pub fn change_member_role(
         &mut self,
         requester_user_id: UserId,
@@ -848,9 +848,9 @@ fn validate_invite_params(role: Role, permissions: &[Permission]) -> Result<(), 
 }
 
 fn validate_role_permissions(role: Role, permissions: &[Permission]) -> Result<(), DomainError> {
-    if role != Role::Other && !permissions.is_empty() {
+    if role != Role::Guest && !permissions.is_empty() {
         return Err(DomainError::InvariantViolation {
-            message: "Custom permissions can only be configured for Role::Other".to_string(),
+            message: "Custom permissions can only be configured for Role::Guest".to_string(),
         });
     }
     Ok(())
@@ -967,7 +967,7 @@ mod tests {
         ];
         let expected_perms = [Permission::ViewBudget, Permission::RecordOwnTransactions];
         let rel = Relationship::try_new("Grandma").unwrap();
-        let invite = create_invite(&mut family, owner_id, Role::Other, perms, Some(rel.clone()));
+        let invite = create_invite(&mut family, owner_id, Role::Guest, perms, Some(rel.clone()));
         assert_eq!(invite.created_by(), owner_member_id);
         assert_eq!(invite.permissions(), &expected_perms);
         assert_eq!(invite.relationship(), Some(&rel));
@@ -1059,7 +1059,7 @@ mod tests {
 
         let rel = Relationship::try_new("Sibling").unwrap();
         let perms = vec![Permission::ViewBudget];
-        let invite = create_invite(&mut family, owner_id, Role::Other, perms, Some(rel));
+        let invite = create_invite(&mut family, owner_id, Role::Guest, perms, Some(rel));
         let (rejoined, events) = family
             .accept_invite_at(
                 invite.token(),
@@ -1071,7 +1071,7 @@ mod tests {
 
         assert_eq!(rejoined.id(), original_member_id);
         assert!(rejoined.is_active());
-        assert_eq!(rejoined.role(), Role::Other);
+        assert_eq!(rejoined.role(), Role::Guest);
         assert_eq!(rejoined.display_name().as_str(), "Robert");
         assert_eq!(rejoined.permissions(), &[Permission::ViewBudget]);
         assert_eq!(family.active_members().count(), 2);
@@ -1277,7 +1277,7 @@ mod tests {
             .change_member_role_at(
                 owner_id,
                 bob.id(),
-                Role::Other,
+                Role::Guest,
                 vec![Permission::ViewLoans, Permission::ViewLoans],
                 t0() + chrono::Duration::minutes(10),
             )
@@ -1286,7 +1286,7 @@ mod tests {
             events.as_slice(),
             [DomainEvent::MemberRoleChanged {
                 old_role: Role::Member,
-                new_role: Role::Other,
+                new_role: Role::Guest,
                 permissions,
                 ..
             }] if permissions == &[Permission::ViewLoans]
@@ -1296,7 +1296,7 @@ mod tests {
             .change_member_role_at(
                 owner_id,
                 bob.id(),
-                Role::Other,
+                Role::Guest,
                 vec![Permission::ViewLoans],
                 t0() + chrono::Duration::minutes(11),
             )
@@ -1530,11 +1530,11 @@ mod tests {
         assert!(!member.can_access_debt_features());
         assert!(matches!(
             member.assert_debt_access(),
-            Err(DomainError::InsufficientRole { role: Role::Other })
+            Err(DomainError::InsufficientRole { role: Role::Guest })
         ));
         assert!(matches!(
             member.assert_can_perform(DomainAction::ManageFamily),
-            Err(DomainError::InsufficientRole { role: Role::Other })
+            Err(DomainError::InsufficientRole { role: Role::Guest })
         ));
     }
 }

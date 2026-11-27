@@ -158,7 +158,7 @@
   - `0`, `-1`, `2_592_001`, `from_days(31)`, `1500ms` $\rightarrow$ `Err`
 
 ### VO-11 — Display text value objects reject control characters and Unicode BiDi overrides
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **For all**: Input `&str` `raw` passed to `FamilyName::try_new`, `MemberDisplayName::try_new`, or `Relationship::try_new`.
 - **Then**: Construction and JSON deserialization reject strings whose trimmed content contains any `char::is_control()` character or Unicode bidirectional override/isolate formatting character (`U+202A..=U+202E`, `U+2066..=U+2069`, `U+200E`, `U+200F`, `U+061C`) with `PredicateViolated` (converting to `DomainError::InvalidFamilyName` / `InvalidDisplayName` / `InvalidRelationship`). Empty and over-length checks still take precedence (`NotEmptyViolated`, `LenCharMaxViolated`).
@@ -168,7 +168,7 @@
   - `"  Família da Silva  "` $\rightarrow$ `Ok`
 
 ### VO-12 — InviteTokenHash computes deterministic 64-char lowercase hex SHA-256 digest
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **For all**: `token: InviteTokenId` or raw `&str` hex digest.
 - **Then**:
@@ -181,7 +181,7 @@
   - 64 `'A'` chars (uppercase), 63 `'a'` chars, 64 `'g'` chars $\rightarrow$ `Err`
 
 ### VO-13 — SignedMoney supports negative, zero, and positive decimals with currency-safe checked arithmetic
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `adr:0006`
 - **For all**: `SignedMoney` values `a(amt_a, cur_a)` and `b(amt_b, cur_b)` across negative, zero, and positive `Decimal` values.
 - **Then**:
@@ -195,7 +195,7 @@
   - `-10.00 USD + 10.00 EUR` $\rightarrow$ `Err(DomainError::CurrencyMismatch { .. })`
 
 ### VO-14 — PositiveMoney strictly requires amounts greater than zero
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **For all**: `amount: Decimal` and valid `currency: CurrencyCode` (or JSON `{"amount": ..., "currency": ...}`).
 - **Then**: `PositiveMoney::new(amount, currency)` (and serde deserialization) returns `Ok(pm)` when `amount > Decimal::ZERO`, and `Err(DomainError::NonPositiveAmount { amount })` when `amount <= Decimal::ZERO`. Conversion `Into<Money>` / `as_money()` preserves exact `amount` and `currency`.
@@ -205,7 +205,7 @@
   - `0.00 USD`, `-0.01 USD` $\rightarrow$ `Err(DomainError::NonPositiveAmount { .. })`
 
 ### VO-15 — AccountName and BankName enforce trimmed character bounds and reject control/BiDi characters
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `doc:documentation/architecture/database-schema.md`
 - **For all**: Input `&str` `raw`.
 - **Then**:
@@ -217,7 +217,7 @@
   - `BankName`: 1 char, 100 chars $\rightarrow$ `Ok`; `""`, 101 chars, `"Bank\u{202E}"` $\rightarrow$ `Err`
 
 ### VO-16 — LastFour enforces exactly 4 ASCII digits and HexColor enforces normalized #RRGGBB
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `doc:documentation/architecture/database-schema.md`
 - **For all**: Input `&str` `raw`.
 - **Then**:
@@ -229,7 +229,7 @@
   - `HexColor`: `"#1a2b3c"` $\rightarrow$ `Ok("#1A2B3C")`; `"1A2B3C"`, `"#FFF"`, `"#12345G"` $\rightarrow$ `Err`
 
 ### VO-17 — YearMonth validates YYYY-MM format and computes exact UTC end-of-month cutoff
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `adr:0006`
 - **For all**: Input `&str` `raw` or `(year: i32, month: u32)`.
 - **Then**:
@@ -241,7 +241,7 @@
   - `"2026-00"`, `"2026-13"`, `"26-03"`, `"2026/03"` $\rightarrow$ `Err`
 
 ### VO-18 — CategoryName, CategoryIcon, Tag, and TransactionDescription enforce trimmed bounds and hygiene
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `doc:documentation/architecture/database-schema.md`
 - **For all**: Input `&str` `raw`.
 - **Then**: Trims whitespace, rejects control and Unicode BiDi override/isolate characters, and enforces exact character bounds:

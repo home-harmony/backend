@@ -10,15 +10,16 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::value_objects::{
-    CurrencyCode, FamilyId, FamilyName, InviteId, InviteTokenHash, MemberId, Permission, Role,
-    UserId,
+    AccountId, AccountKind, CategoryId, CurrencyCode, FamilyId, FamilyName, InviteId,
+    InviteTokenHash, MemberId, Permission, PositiveMoney, Role, SignedMoney, TransactionId,
+    TransactionKind, UserId, YearMonth,
 };
 
 /// All domain events emitted across all bounded contexts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
 pub enum DomainEvent {
-    // ── Sprint 1: Identity & Family context ─────────────────────────────────────
+    // ── Sprint 1–2: Identity & Family context ───────────────────────────────────
     FamilyCreated {
         family_id: FamilyId,
         name: FamilyName,
@@ -56,14 +57,58 @@ pub enum DomainEvent {
         removed_by: MemberId,
         occurred_at: DateTime<Utc>,
     },
-    // ── TODO: Sprint 3 — Payment Cards & Accounts Context ───────────────────────
-    // - AccountRegistered { family_id, account_id, owner_member_id, kind, currency, occurred_at }
-    // - AccountBalanceSnapshotted { family_id, account_id, year_month, closing_balance, occurred_at }
 
-    // ── TODO: Sprint 3 — Ledger Core Context ─────────────────────────────────────
-    // - TransactionRecorded { family_id, transaction_id, recorded_by, kind, amount, occurred_at }
-    // - TransactionReversed { family_id, transaction_id, amendment_of_id, amount, occurred_at }
-    // - TransactionDeleted { family_id, transaction_id, occurred_at }
+    // ── Sprint 3: Payment Cards & Accounts Context ──────────────────────────────
+    AccountRegistered {
+        family_id: FamilyId,
+        account_id: AccountId,
+        owner_member_id: MemberId,
+        kind: AccountKind,
+        currency: CurrencyCode,
+        occurred_at: DateTime<Utc>,
+    },
+    AccountBalanceSnapshotted {
+        family_id: FamilyId,
+        account_id: AccountId,
+        year_month: YearMonth,
+        closing_balance: SignedMoney,
+        occurred_at: DateTime<Utc>,
+    },
+
+    // ── Sprint 3: Ledger Core Context ───────────────────────────────────────────
+    TransactionRecorded {
+        family_id: FamilyId,
+        transaction_id: TransactionId,
+        recorded_by: MemberId,
+        kind: TransactionKind,
+        amount: PositiveMoney,
+        destination_amount: Option<PositiveMoney>,
+        source_account_id: Option<AccountId>,
+        destination_account_id: Option<AccountId>,
+        category_id: Option<CategoryId>,
+        amendment_of_id: Option<TransactionId>,
+        occurred_at: DateTime<Utc>,
+    },
+    TransactionReversed {
+        family_id: FamilyId,
+        reversal_transaction_id: TransactionId,
+        corrected_transaction_id: TransactionId,
+        amendment_of_id: TransactionId,
+        source_account_id: Option<AccountId>,
+        destination_account_id: Option<AccountId>,
+        amount: PositiveMoney,
+        destination_amount: Option<PositiveMoney>,
+        reversed_by: MemberId,
+        occurred_at: DateTime<Utc>,
+    },
+    TransactionDeleted {
+        family_id: FamilyId,
+        transaction_id: TransactionId,
+        source_account_id: Option<AccountId>,
+        destination_account_id: Option<AccountId>,
+        deleted_by: MemberId,
+        occurred_at: DateTime<Utc>,
+    },
 
     // ── TODO: Sprint 4 — Debt Planner Context ────────────────────────────────────
     // - LoanRegistered { family_id, loan_id, name, loan_kind_id, principal, occurred_at }
@@ -98,7 +143,12 @@ impl DomainEvent {
             | DomainEvent::MemberInvited { family_id, .. }
             | DomainEvent::MemberJoined { family_id, .. }
             | DomainEvent::MemberRoleChanged { family_id, .. }
-            | DomainEvent::MemberRemoved { family_id, .. } => *family_id,
+            | DomainEvent::MemberRemoved { family_id, .. }
+            | DomainEvent::AccountRegistered { family_id, .. }
+            | DomainEvent::AccountBalanceSnapshotted { family_id, .. }
+            | DomainEvent::TransactionRecorded { family_id, .. }
+            | DomainEvent::TransactionReversed { family_id, .. }
+            | DomainEvent::TransactionDeleted { family_id, .. } => *family_id,
         }
     }
 
@@ -109,7 +159,12 @@ impl DomainEvent {
             | DomainEvent::MemberInvited { occurred_at, .. }
             | DomainEvent::MemberJoined { occurred_at, .. }
             | DomainEvent::MemberRoleChanged { occurred_at, .. }
-            | DomainEvent::MemberRemoved { occurred_at, .. } => *occurred_at,
+            | DomainEvent::MemberRemoved { occurred_at, .. }
+            | DomainEvent::AccountRegistered { occurred_at, .. }
+            | DomainEvent::AccountBalanceSnapshotted { occurred_at, .. }
+            | DomainEvent::TransactionRecorded { occurred_at, .. }
+            | DomainEvent::TransactionReversed { occurred_at, .. }
+            | DomainEvent::TransactionDeleted { occurred_at, .. } => *occurred_at,
         }
     }
 
@@ -121,6 +176,11 @@ impl DomainEvent {
             DomainEvent::MemberJoined { .. } => "MemberJoined",
             DomainEvent::MemberRoleChanged { .. } => "MemberRoleChanged",
             DomainEvent::MemberRemoved { .. } => "MemberRemoved",
+            DomainEvent::AccountRegistered { .. } => "AccountRegistered",
+            DomainEvent::AccountBalanceSnapshotted { .. } => "AccountBalanceSnapshotted",
+            DomainEvent::TransactionRecorded { .. } => "TransactionRecorded",
+            DomainEvent::TransactionReversed { .. } => "TransactionReversed",
+            DomainEvent::TransactionDeleted { .. } => "TransactionDeleted",
         }
     }
 }
@@ -179,15 +239,8 @@ mod tests {
         let occurred_at = Utc::now();
         let mut events = sample_family_events(family_id, member_id, occurred_at);
         events.extend(sample_member_events(family_id, member_id, occurred_at));
-        events.push((
-            DomainEvent::MemberRemoved {
-                family_id,
-                member_id,
-                removed_by: member_id,
-                occurred_at,
-            },
-            "MemberRemoved",
-        ));
+        events.extend(sample_account_events(family_id, member_id, occurred_at));
+        events.extend(sample_ledger_events(family_id, member_id, occurred_at));
         events
     }
 
@@ -250,6 +303,101 @@ mod tests {
                     occurred_at,
                 },
                 "MemberRoleChanged",
+            ),
+            (
+                DomainEvent::MemberRemoved {
+                    family_id,
+                    member_id,
+                    removed_by: member_id,
+                    occurred_at,
+                },
+                "MemberRemoved",
+            ),
+        ]
+    }
+
+    fn sample_account_events(
+        family_id: FamilyId,
+        member_id: MemberId,
+        occurred_at: DateTime<Utc>,
+    ) -> Vec<(DomainEvent, &'static str)> {
+        let usd = CurrencyCode::try_new("USD").unwrap();
+        let account_id = AccountId::new_v4();
+        vec![
+            (
+                DomainEvent::AccountRegistered {
+                    family_id,
+                    account_id,
+                    owner_member_id: member_id,
+                    kind: AccountKind::BankAccount,
+                    currency: usd.clone(),
+                    occurred_at,
+                },
+                "AccountRegistered",
+            ),
+            (
+                DomainEvent::AccountBalanceSnapshotted {
+                    family_id,
+                    account_id,
+                    year_month: YearMonth::from_ym(2026, 11).unwrap(),
+                    closing_balance: SignedMoney::zero(usd),
+                    occurred_at,
+                },
+                "AccountBalanceSnapshotted",
+            ),
+        ]
+    }
+
+    fn sample_ledger_events(
+        family_id: FamilyId,
+        member_id: MemberId,
+        occurred_at: DateTime<Utc>,
+    ) -> Vec<(DomainEvent, &'static str)> {
+        let usd = CurrencyCode::try_new("USD").unwrap();
+        let amount = PositiveMoney::new(rust_decimal_macros::dec!(25.00), usd).unwrap();
+        let tx_id = TransactionId::now_v7();
+        vec![
+            (
+                DomainEvent::TransactionRecorded {
+                    family_id,
+                    transaction_id: tx_id,
+                    recorded_by: member_id,
+                    kind: TransactionKind::Expense,
+                    amount: amount.clone(),
+                    destination_amount: None,
+                    source_account_id: Some(AccountId::new_v4()),
+                    destination_account_id: None,
+                    category_id: Some(CategoryId::new_v4()),
+                    amendment_of_id: None,
+                    occurred_at,
+                },
+                "TransactionRecorded",
+            ),
+            (
+                DomainEvent::TransactionReversed {
+                    family_id,
+                    reversal_transaction_id: TransactionId::now_v7(),
+                    corrected_transaction_id: TransactionId::now_v7(),
+                    amendment_of_id: tx_id,
+                    source_account_id: None,
+                    destination_account_id: Some(AccountId::new_v4()),
+                    amount,
+                    destination_amount: None,
+                    reversed_by: member_id,
+                    occurred_at,
+                },
+                "TransactionReversed",
+            ),
+            (
+                DomainEvent::TransactionDeleted {
+                    family_id,
+                    transaction_id: tx_id,
+                    source_account_id: Some(AccountId::new_v4()),
+                    destination_account_id: None,
+                    deleted_by: member_id,
+                    occurred_at,
+                },
+                "TransactionDeleted",
             ),
         ]
     }

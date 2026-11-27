@@ -34,7 +34,9 @@ pub struct DsqlFamilyRepository {
     occ_config: OCCRetryConfig,
 }
 
+#[derive(sqlx::FromRow)]
 struct MembershipRow {
+    member_id: Uuid,
     role: String,
     permissions: Value,
 }
@@ -72,11 +74,14 @@ struct InviteTokenRow {
     used: bool,
 }
 
+#[derive(sqlx::FromRow)]
 struct UserFamilyRow {
     family_id: Uuid,
     name: String,
     home_currency: String,
+    member_id: Uuid,
     role: String,
+    permissions: Value,
     display_name: String,
 }
 
@@ -109,13 +114,12 @@ impl MembershipReader for DsqlFamilyRepository {
             .await
             .map_err(|err| internal_err("Failed to begin read-only membership tx", err))?;
 
-        let row = sqlx::query_as!(
-            MembershipRow,
-            "SELECT role, permissions FROM family_members \
+        let row = sqlx::query_as::<_, MembershipRow>(
+            "SELECT id AS member_id, role, permissions FROM family_members \
              WHERE family_id = $1 AND user_id = $2 AND deleted_at IS NULL",
-            family_id.into_inner(),
-            user_id.into_inner(),
         )
+        .bind(family_id.into_inner())
+        .bind(user_id.into_inner())
         .fetch_optional(&mut *tx)
         .await
         .map_err(|err| internal_err("Failed to query active family membership", err))?;
@@ -164,15 +168,14 @@ impl FamilyRepository for DsqlFamilyRepository {
             .await
             .map_err(|err| internal_err("Failed to begin read-only user families tx", err))?;
 
-        let rows = sqlx::query_as!(
-            UserFamilyRow,
-            "SELECT f.id AS family_id, f.name, f.home_currency, m.role, m.display_name \
+        let rows = sqlx::query_as::<_, UserFamilyRow>(
+            "SELECT f.id AS family_id, f.name, f.home_currency, m.id AS member_id, m.role, m.permissions, m.display_name \
              FROM family_members m \
              INNER JOIN family_families f ON f.id = m.family_id \
              WHERE m.user_id = $1 AND m.deleted_at IS NULL AND f.deleted_at IS NULL \
              ORDER BY f.created_at ASC, f.id ASC",
-            user_id.into_inner(),
         )
+        .bind(user_id.into_inner())
         .fetch_all(&mut *tx)
         .await
         .map_err(|err| internal_err("Failed to list user families", err))?;
@@ -350,6 +353,7 @@ async fn fetch_scoped_token_rows(
 
 fn map_member_access(row: MembershipRow) -> Result<MemberAccess, DomainError> {
     Ok(MemberAccess {
+        member_id: MemberId::from_uuid(row.member_id),
         role: parse_role(&row.role)?,
         permissions: parse_permissions(row.permissions)?,
     })
@@ -361,6 +365,7 @@ fn map_user_family_summary(row: UserFamilyRow) -> Result<UserFamilySummary, Doma
     let home_currency = CurrencyCode::try_new(row.home_currency.trim())
         .map_err(|err| internal_err("Invalid persisted home currency", err))?;
     let role = parse_role(&row.role)?;
+    let permissions = parse_permissions(row.permissions)?;
     let display_name = MemberDisplayName::try_new(row.display_name)
         .map_err(|err| internal_err("Invalid persisted display name", err))?;
 
@@ -370,7 +375,12 @@ fn map_user_family_summary(row: UserFamilyRow) -> Result<UserFamilySummary, Doma
             name,
             home_currency,
         },
-        membership: MemberSummary { role, display_name },
+        membership: MemberSummary {
+            member_id: MemberId::from_uuid(row.member_id),
+            role,
+            permissions,
+            display_name,
+        },
     })
 }
 

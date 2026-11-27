@@ -33,8 +33,11 @@ use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use infrastructure::db::{
-    migrations::{DsqlMigrationOptions, MigrationReport, run_dsql_migrations},
+    migrations::{
+        DsqlMigrationOptions, MigrationReport, run_dsql_migrations, wait_for_pending_async_jobs,
+    },
     pool::{PgPool, create_admin_pool},
+    seed::{normalize_legacy_other_roles, seed_system_categories, validate_role_check_constraints},
 };
 
 const MIGRATION_POOL_MAX_CONNECTIONS: u32 = 1;
@@ -93,12 +96,19 @@ async fn handler(pg_pool: &PgPool, event: LambdaEvent<Request>) -> Result<Respon
     let report = run_dsql_migrations(pg_pool, options)
         .await
         .context("Migration run failed")?;
+    let normalized_roles = normalize_legacy_other_roles(pg_pool).await?;
+    validate_role_check_constraints(pg_pool, true).await?;
+    let validation_jobs =
+        wait_for_pending_async_jobs(pg_pool, options.wait_for_indexes).await?;
+    let seeded_categories = seed_system_categories(pg_pool).await?;
 
     info!(
         total_migrations = report.total_migrations,
         applied_now = report.applied_now,
         already_applied = report.already_applied,
-        active_async_jobs = report.active_async_jobs,
+        active_async_jobs = report.active_async_jobs + validation_jobs,
+        normalized_roles,
+        seeded_categories,
         "Schema migrations completed"
     );
 

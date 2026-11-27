@@ -187,6 +187,7 @@ impl MembershipReader for InMemoryFamilyRepo {
             .find(|f| f.id() == family_id)
             .and_then(|f| f.active_members().find(|m| m.user_id() == user_id))
             .map(|m| MemberAccess {
+                member_id: m.id(),
                 role: m.role(),
                 permissions: m.permissions().to_vec(),
             }))
@@ -227,6 +228,7 @@ impl MembershipReader for StubMissingFamilyRepo {
         _user_id: UserId,
     ) -> Result<Option<MemberAccess>, DomainError> {
         Ok(Some(MemberAccess {
+            member_id: MemberId::new_v4(),
             role: Role::Owner,
             permissions: Vec::new(),
         }))
@@ -247,10 +249,10 @@ pub fn build_family_with_all_roles() -> Result<(Family, RoleUsers)> {
     )?;
     let (member, member_id) = add_member(&mut fam, owner, Role::Member, vec![], "Member")?;
     let (child, _) = add_member(&mut fam, owner, Role::Child, vec![], "Child")?;
-    let (other, _) = add_member(&mut fam, owner, Role::Other, vec![], "Other")?;
+    let (other, _) = add_member(&mut fam, owner, Role::Guest, vec![], "Guest")?;
     let all = Permission::all().to_vec();
     let (other_all_perms, other_all_perms_id) =
-        add_member(&mut fam, owner, Role::Other, all, "OtherAll")?;
+        add_member(&mut fam, owner, Role::Guest, all, "GuestAll")?;
     let (removed_member, removed_member_id) = add_removed_member(&mut fam, owner)?;
     let roles = RoleUsers {
         owner,
@@ -295,7 +297,7 @@ pub fn seed_other_invite(
 ) -> Result<InviteTokenId> {
     let (invite, _) = family.create_invite(
         owner,
-        Role::Other,
+        Role::Guest,
         vec![perm],
         Some(Relationship::try_new(relationship)?),
         InviteTtl::from_hours(24)?,
@@ -554,7 +556,9 @@ fn summarize_for_user(family: &Family, user_id: UserId) -> Option<UserFamilySumm
                 home_currency: family.home_currency().clone(),
             },
             membership: MemberSummary {
+                member_id: m.id(),
                 role: m.role(),
+                permissions: m.permissions().to_vec(),
                 display_name: m.display_name().clone(),
             },
         })

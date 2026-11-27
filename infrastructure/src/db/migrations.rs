@@ -89,11 +89,12 @@ pub fn validate_dsql_invariants(migrator: &Migrator) -> Result<()> {
     Ok(())
 }
 
-/// Strips Aurora DSQL's `ASYNC` index keyword so tests can run against PostgreSQL 16.
+/// Strips Aurora DSQL's `ASYNC` keywords so tests can run against PostgreSQL 16.
 #[must_use]
 pub fn rewrite_sql_for_postgres(sql: &str) -> String {
     sql.replace("CREATE UNIQUE INDEX ASYNC", "CREATE UNIQUE INDEX")
         .replace("CREATE INDEX ASYNC", "CREATE INDEX")
+        .replace("ALTER TABLE ASYNC", "ALTER TABLE")
 }
 
 /// Applies all pending embedded migrations against an Aurora DSQL pool.
@@ -241,6 +242,11 @@ fn occ_backoff_delay(attempt: u32) -> Duration {
     Duration::from_millis(delay_ms.min(OCC_MAX_DELAY_MS))
 }
 
+/// Reconciles any active Aurora DSQL background jobs (`CREATE INDEX ASYNC` / `ALTER TABLE ASYNC`).
+pub async fn wait_for_pending_async_jobs(pool: &PgPool, wait_for_jobs: bool) -> Result<usize> {
+    reconcile_async_index_jobs(pool, wait_for_jobs).await
+}
+
 async fn reconcile_async_index_jobs(pool: &PgPool, wait_for_indexes: bool) -> Result<usize> {
     let (active, failed) = query_pending_async_jobs(pool).await?;
     if !failed.is_empty() {
@@ -334,7 +340,7 @@ mod tests {
     fn dsql_migrator_disables_advisory_locking_and_validates_invariants() {
         let migrator = dsql_migrator();
         assert!(!migrator.locking);
-        assert_eq!(migrator.iter().len(), 36);
+        assert_eq!(migrator.iter().len(), 43);
         assert!(validate_dsql_invariants(&migrator).is_ok());
     }
 
@@ -366,6 +372,12 @@ mod tests {
         assert_eq!(
             rewrite_sql_for_postgres(unique),
             "CREATE UNIQUE INDEX idx_b ON tbl (col);"
+        );
+
+        let alter = "ALTER TABLE ASYNC family_members VALIDATE CONSTRAINT family_members_role_check;";
+        assert_eq!(
+            rewrite_sql_for_postgres(alter),
+            "ALTER TABLE family_members VALIDATE CONSTRAINT family_members_role_check;"
         );
 
         let table = "CREATE TABLE IF NOT EXISTS async_log (id UUID PRIMARY KEY);";

@@ -14,8 +14,8 @@
 | Term | Meaning / API Symbol | Concrete Representation |
 | :--- | :--- | :--- |
 | `UserIdentity` | `api::auth::UserIdentity` | Verified caller identity extracted from API Gateway's Cognito JWT authorizer context (`user_id: UserId` from `sub`, optional `email: Option<Email>`). |
-| `AuthClaims` | `api::auth::AuthClaims` | Verified family-scoped context (`user_id`, `family_id`, `role`, `permissions`, `email`) resolved from `UserIdentity` + active `family_members` row for `X-Family-Id`. |
-| `MembershipReader` | `domain::ports::MembershipReader` | RPITIT port queried by auth middleware to resolve `(role, permissions)` for active (`deleted_at IS NULL`) `(family_id, user_id)` membership. |
+| `AuthClaims` | `api::auth::AuthClaims` | Verified family-scoped context (`user_id`, `family_id`, `member_id`, `role`, `permissions`, `email`) resolved from `UserIdentity` + active `family_members` row for `X-Family-Id`. |
+| `MembershipReader` | `domain::ports::MembershipReader` | RPITIT port queried by auth middleware to resolve `(member_id, role, permissions)` for active (`deleted_at IS NULL`) `(family_id, user_id)` membership. |
 | `LocalJwtVerifier` | `api::auth::LocalJwtVerifier` | Local-development JWT verification adapter (signature, issuer, audience, expiry) producing `UserIdentity`; never used behind API Gateway. |
 | `X-Family-Id` | HTTP request header `X-Family-Id: <UUID>` | Client-supplied workspace selector validated as UUID and verified against `family_members` per request (`ADR-0011`). |
 | `ApiError` | `api::errors::ApiError` | RFC 9457 `application/problem+json` response carrying HTTP `status` and machine-readable `code` (`MISSING_CLAIMS`, `MISSING_FAMILY_ID`, `INVALID_FAMILY_ID`, `FAMILY_ID_MISMATCH`, `USER_NOT_IN_FAMILY`, `INSUFFICIENT_ROLE`). |
@@ -75,7 +75,7 @@
 ### AU-07 — Any active member can read workspace details and active member roster
 - **Status**: `Approved`
 - **Origin**: `human`
-- **Given**: Valid `UserIdentity` with active membership in Family `A` under any role (`Owner`, `Member`, `Child`, or `Other` with `permissions = []`) and `X-Family-Id: A`.
+- **Given**: Valid `UserIdentity` with active membership in Family `A` under any role (`Owner`, `Member`, `Child`, or `Guest` with `permissions = []`) and `X-Family-Id: A`.
 - **When**: Caller invokes `GET /families/A` or `GET /families/A/members`.
 - **Then**: Responds with `200 OK` containing only active (`deleted_at IS NULL`) members for Family `A`.
 - **Notes**: Allows workspace switchers and member name display across all member roles.
@@ -83,13 +83,13 @@
 ### AU-08 — Non-Owner receives 403 `INSUFFICIENT_ROLE` on family management routes
 - **Status**: `Approved`
 - **Origin**: `human`
-- **Given**: Valid `UserIdentity` with active `Role::Member`, `Role::Child`, or `Role::Other` (even with all 8 `Permission` flags) in Family `A`, sending `X-Family-Id: A`.
+- **Given**: Valid `UserIdentity` with active `Role::Member`, `Role::Child`, or `Role::Guest` (even with all 8 `Permission` flags) in Family `A`, sending `X-Family-Id: A`.
 - **When**: Caller invokes `PUT /families/A`, `POST /families/A/invites`, `PATCH /families/A/members/{mid}/role`, or `DELETE /families/A/members/{mid}`.
 - **Then**: Responds with `403 Forbidden`, `Content-Type: application/problem+json`, and `code == "INSUFFICIENT_ROLE"`.
 - **Notes**: Enforces Owner-only family governance end-to-end at Layer 2b.
 
 ### AU-09 — Verified JWT claims require valid `sub`, supported `token_use`, and verified email for ID tokens
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **Given**: Verified JWT claims map from API Gateway or `LocalJwtVerifier`.
 - **When**: `UserIdentity::from_claim_map` parses the claims.
@@ -101,7 +101,7 @@
 - **Notes**: Replaces main's pre-merge `AU-02`..`AU-04` (Option 2B). Fixtures for `AU-01`..`AU-08` supply `token_use` and `email_verified`.
 
 ### AU-10 — Local JWT verifier fails closed and API responses carry security headers
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **Given**: Local adapter (`LocalJwtVerifier`) with a missing, malformed, expired, wrong-issuer, or wrong-audience bearer token; or any API / `ApiError` response.
 - **When**: Auth middleware runs or a handler/error responds.
@@ -111,7 +111,7 @@
 - **Notes**: Replaces main's pre-merge `AU-01` local-adapter clause and `AU-08` header clause.
 
 ### AU-11 — `AuthClaims` resolves caller `member_id` and `GET /profile/families` includes `member_id` and `permissions`
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `adr:0011`
 - **Given**: Valid `UserIdentity` with active membership (`MemberId = M`, `Role::Guest`, `permissions = [ViewAllAccounts, RecordOwnTransactions]`) in Family `F`.
 - **When**: Caller invokes `GET /profile/families` (identity-only) and any family-scoped route with `X-Family-Id: F`.
@@ -121,7 +121,7 @@
 - **Notes**: Enables zero-extra-roundtrip ownership and permission checks in `accounts_service`, `ledger_service`, and `frontend-web/`.
 
 ### AU-12 — `Role::Guest` without account or ledger capability flags receives 403 `INSUFFICIENT_ROLE`
-- **Status**: `Draft`
+- **Status**: `Approved`
 - **Origin**: `human`
 - **Given**: Active `Role::Guest` member in Family `F` whose `permissions` is `[Permission::ViewBudget]` (neither `ViewAllAccounts` nor `ManageOwnAccounts`, and none of `ViewAllTransactions`, `RecordOwnTransactions`, `RecordAnyTransaction`).
 - **When**: Caller invokes `GET /accounts`, `POST /accounts`, `GET /categories`, `GET /transactions`, or `POST /transactions` with `X-Family-Id: F`.

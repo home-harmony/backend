@@ -3,3 +3,4 @@
 pub mod migrations;
 pub mod pagination;
 pub mod pool;
+pub mod seed;

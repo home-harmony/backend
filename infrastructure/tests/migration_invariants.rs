@@ -8,6 +8,8 @@ use anyhow::{Context, Result, bail};
 
 use infrastructure::db::migrations::{dsql_migrator, postgres_migrator, validate_dsql_invariants};
 
+const EXPECTED_MIGRATION_COUNT: usize = 43;
+
 const EXPECTED_TABLES: [&str; 18] = [
     "family_families",
     "family_members",
@@ -29,25 +31,27 @@ const EXPECTED_TABLES: [&str; 18] = [
     "exchange_rates",
 ];
 
-const EXPECTED_INDEXES: [&str; 18] = [
-    "idx_members_family",
-    "idx_accounts_family",
-    "idx_balance_snapshots_account",
-    "idx_tx_family_time",
-    "idx_tx_account_src",
-    "idx_tx_account_dst",
-    "idx_loan_kinds_family",
-    "idx_loans_family",
-    "idx_loan_payments",
-    "idx_recurring_family",
-    "idx_recurring_due",
-    "idx_recurring_linked_loan",
-    "idx_recurring_records",
-    "idx_goals_family",
-    "idx_goal_contributions",
-    "idx_exchange_rates",
-    "idx_members_user",
-    "idx_invite_tokens_family",
+const EXPECTED_INDEXES: [(usize, &str); 20] = [
+    (18, "idx_members_family"),
+    (19, "idx_accounts_family"),
+    (20, "idx_balance_snapshots_account"),
+    (21, "idx_tx_family_time"),
+    (22, "idx_tx_account_src"),
+    (23, "idx_tx_account_dst"),
+    (24, "idx_loan_kinds_family"),
+    (25, "idx_loans_family"),
+    (26, "idx_loan_payments"),
+    (27, "idx_recurring_family"),
+    (28, "idx_recurring_due"),
+    (29, "idx_recurring_linked_loan"),
+    (30, "idx_recurring_records"),
+    (31, "idx_goals_family"),
+    (32, "idx_goal_contributions"),
+    (33, "idx_exchange_rates"),
+    (34, "idx_members_user"),
+    (35, "idx_invite_tokens_family"),
+    (41, "idx_categories_family"),
+    (42, "idx_tx_amendment_of"),
 ];
 
 const BANNED_SQL_TOKENS: [&str; 7] = [
@@ -70,6 +74,7 @@ fn embedded_dsql_migrator_has_ordered_non_transactional_migrations() -> Result<(
     let mut expected: Vec<i64> = (20260616000001..=20260616000034).collect();
     expected.push(20261124000001);
     expected.push(20261124000002);
+    expected.extend(20261127000001..=20261127000007);
     assert_eq!(versions, expected);
     Ok(())
 }
@@ -77,7 +82,7 @@ fn embedded_dsql_migrator_has_ordered_non_transactional_migrations() -> Result<(
 #[test]
 fn disk_migration_files_enforce_single_ddl_and_dsql_constraints() -> Result<()> {
     let files = collect_migration_files()?;
-    assert_eq!(files.len(), 36);
+    assert_eq!(files.len(), EXPECTED_MIGRATION_COUNT);
 
     for path in &files {
         assert_file_satisfies_dsql_rules(path)?;
@@ -89,7 +94,7 @@ fn disk_migration_files_enforce_single_ddl_and_dsql_constraints() -> Result<()> 
 fn table_migrations_match_schema_catalog_and_invite_check() {
     let migrator = dsql_migrator();
     let migrations: Vec<_> = migrator.iter().collect();
-    assert_eq!(migrations.len(), 36);
+    assert_eq!(migrations.len(), EXPECTED_MIGRATION_COUNT);
 
     for (idx, table) in EXPECTED_TABLES.iter().enumerate() {
         let sql = migrations[idx].sql.as_str();
@@ -148,21 +153,40 @@ fn table_migrations_match_schema_catalog_and_invite_check() {
 fn index_migrations_use_async_and_rewrite_cleanly_for_postgres() {
     let migrator = dsql_migrator();
     let migrations: Vec<_> = migrator.iter().collect();
-    assert_eq!(migrations.len(), 36);
+    assert_eq!(migrations.len(), EXPECTED_MIGRATION_COUNT);
 
-    for (offset, index_name) in EXPECTED_INDEXES.iter().enumerate() {
-        let sql = migrations[18 + offset].sql.as_str();
+    for (idx, index_name) in EXPECTED_INDEXES {
+        let sql = migrations[idx].sql.as_str();
         let upper = sql.to_ascii_uppercase();
         assert!(
             sql.contains(&format!("CREATE INDEX ASYNC IF NOT EXISTS {index_name} ")),
             "migration {} missing expected async index `{index_name}`",
-            migrations[18 + offset].version
+            migrations[idx].version
         );
         assert!(
             !contains_token(&upper, "DESC") && !contains_token(&upper, "ASC"),
             "Aurora DSQL does not support ASC/DESC in index definitions ({index_name})"
         );
     }
+
+    assert!(
+        migrations[37]
+            .sql
+            .as_str()
+            .contains("CHECK (role IN ('owner','member','child','guest')) NOT VALID")
+    );
+    assert!(
+        migrations[39]
+            .sql
+            .as_str()
+            .contains("CHECK (role IN ('member','child','guest')) NOT VALID")
+    );
+    assert!(
+        migrations[40]
+            .sql
+            .as_str()
+            .contains("ADD COLUMN IF NOT EXISTS opening_balance NUMERIC(19,4) NOT NULL DEFAULT 0")
+    );
 
     let pg_migrator = postgres_migrator();
     assert_eq!(
@@ -171,10 +195,15 @@ fn index_migrations_use_async_and_rewrite_cleanly_for_postgres() {
             .map(|m| m.version)
             .collect::<BTreeSet<_>>()
             .len(),
-        36
+        EXPECTED_MIGRATION_COUNT
     );
     for migration in pg_migrator.iter() {
-        assert!(migration.no_tx && !migration.sql.as_str().contains("CREATE INDEX ASYNC"));
+        let sql = migration.sql.as_str();
+        assert!(
+            migration.no_tx
+                && !sql.contains("CREATE INDEX ASYNC")
+                && !sql.contains("ALTER TABLE ASYNC")
+        );
     }
 }
 

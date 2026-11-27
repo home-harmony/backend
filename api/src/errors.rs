@@ -110,25 +110,60 @@ fn domain_error_status_and_code(err: &DomainError) -> (StatusCode, &'static str)
         E::FamilyNotFound { .. } => (S::NOT_FOUND, "FAMILY_NOT_FOUND"),
         E::MemberNotFound { .. } => (S::NOT_FOUND, "MEMBER_NOT_FOUND"),
         E::InviteTokenNotFound => (S::NOT_FOUND, "INVITE_TOKEN_NOT_FOUND"),
+        E::AccountNotFound { .. } => (S::NOT_FOUND, "ACCOUNT_NOT_FOUND"),
+        E::CategoryNotFound { .. } => (S::NOT_FOUND, "CATEGORY_NOT_FOUND"),
+        E::TransactionNotFound { .. } => (S::NOT_FOUND, "TRANSACTION_NOT_FOUND"),
         E::FamilyDeleted => (S::GONE, "FAMILY_DELETED"),
         E::TokenExpired => (S::GONE, "TOKEN_EXPIRED"),
+        E::AccountDeleted { .. } => (S::GONE, "ACCOUNT_DELETED"),
+        E::CategoryDeleted { .. } => (S::GONE, "CATEGORY_DELETED"),
+        E::TransactionDeleted { .. } => (S::GONE, "TRANSACTION_DELETED"),
         E::TokenAlreadyUsed => (S::CONFLICT, "TOKEN_ALREADY_USED"),
         E::MemberAlreadyExists { .. } => (S::CONFLICT, "MEMBER_ALREADY_EXISTS"),
         E::DuplicateOwner => (S::CONFLICT, "DUPLICATE_OWNER"),
         E::CannotRemoveOwner => (S::CONFLICT, "CANNOT_REMOVE_OWNER"),
+        E::CannotModifySystemCategory { .. } => (S::CONFLICT, "CANNOT_MODIFY_SYSTEM_CATEGORY"),
+        E::TransactionAlreadyAmended { .. } => (S::CONFLICT, "TRANSACTION_ALREADY_AMENDED"),
+        E::IdempotencyConflict { .. } => (S::CONFLICT, "IDEMPOTENCY_CONFLICT"),
         E::Internal { .. } => (S::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
-        E::CurrencyMismatch { .. } => (S::UNPROCESSABLE_ENTITY, "CURRENCY_MISMATCH"),
-        E::NegativeAmount { .. } => (S::UNPROCESSABLE_ENTITY, "NEGATIVE_AMOUNT"),
-        E::ArithmeticOverflow { .. } => (S::UNPROCESSABLE_ENTITY, "ARITHMETIC_OVERFLOW"),
-        E::InvalidCurrencyCode { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_CURRENCY_CODE"),
-        E::InvalidFamilyName { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_FAMILY_NAME"),
-        E::InvalidDisplayName { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_DISPLAY_NAME"),
-        E::InvalidEmail { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_EMAIL"),
-        E::InvalidRelationship { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_RELATIONSHIP"),
-        E::InvalidInviteTtl { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_INVITE_TTL"),
-        E::InvalidPaymentSplit { .. } => (S::UNPROCESSABLE_ENTITY, "INVALID_PAYMENT_SPLIT"),
-        E::InvariantViolation { .. } => (S::UNPROCESSABLE_ENTITY, "INVARIANT_VIOLATION"),
+        _ => validation_error_code(err),
     }
+}
+
+fn validation_error_code(err: &DomainError) -> (StatusCode, &'static str) {
+    use DomainError as E;
+    let code = match err {
+        E::CurrencyMismatch { .. } => "CURRENCY_MISMATCH",
+        E::NegativeAmount { .. } => "NEGATIVE_AMOUNT",
+        E::NonPositiveAmount { .. } => "NON_POSITIVE_AMOUNT",
+        E::ArithmeticOverflow { .. } => "ARITHMETIC_OVERFLOW",
+        E::InvalidCurrencyCode { .. } => "INVALID_CURRENCY_CODE",
+        E::InvalidYearMonth { .. } => "INVALID_YEAR_MONTH",
+        E::InvalidHexColor { .. } => "INVALID_HEX_COLOR",
+        E::InvalidFamilyName { .. } => "INVALID_FAMILY_NAME",
+        E::InvalidDisplayName { .. } => "INVALID_DISPLAY_NAME",
+        E::InvalidEmail { .. } => "INVALID_EMAIL",
+        E::InvalidRelationship { .. } => "INVALID_RELATIONSHIP",
+        E::InvalidInviteTtl { .. } => "INVALID_INVITE_TTL",
+        E::InvalidAccountName { .. } => "INVALID_ACCOUNT_NAME",
+        E::InvalidBankName { .. } => "INVALID_BANK_NAME",
+        E::InvalidLastFour { .. } => "INVALID_LAST_FOUR",
+        E::CreditLimitNotAllowed { .. } => "CREDIT_LIMIT_NOT_ALLOWED",
+        E::InvalidCategoryName { .. } => "INVALID_CATEGORY_NAME",
+        E::InvalidCategoryIcon { .. } => "INVALID_CATEGORY_ICON",
+        E::InvalidTag { .. } => "INVALID_TAG",
+        E::TooManyTags { .. } => "TOO_MANY_TAGS",
+        E::InvalidDescription { .. } => "INVALID_DESCRIPTION",
+        E::CategoryKindMismatch { .. } => "CATEGORY_KIND_MISMATCH",
+        E::CannotAmendReversal => "CANNOT_AMEND_REVERSAL",
+        E::SameAccountTransfer { .. } => "SAME_ACCOUNT_TRANSFER",
+        E::InvalidCashWithdrawalAccounts => "INVALID_CASH_WITHDRAWAL_ACCOUNTS",
+        E::CrossCurrencyDestinationRequired => "CROSS_CURRENCY_DESTINATION_REQUIRED",
+        E::SameCurrencyDestinationForbidden => "SAME_CURRENCY_DESTINATION_FORBIDDEN",
+        E::InvalidPaymentSplit { .. } => "INVALID_PAYMENT_SPLIT",
+        _ => "INVARIANT_VIOLATION",
+    };
+    (StatusCode::UNPROCESSABLE_ENTITY, code)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -139,9 +174,13 @@ mod tests {
         body::{Body, to_bytes},
         routing::post,
     };
-    use domain::value_objects::{CurrencyCode, FamilyId, MemberId, Money, Role, UserId};
+    use domain::value_objects::{
+        AccountId, AccountKind, CategoryId, CurrencyCode, FamilyId, MemberId, Money, Role,
+        TransactionId, UserId,
+    };
     use serde::Deserialize;
     use tower::ServiceExt;
+    use uuid::Uuid;
 
     use super::*;
 
@@ -225,29 +264,35 @@ mod tests {
         (status, content_type, json)
     }
 
-    fn non_validation_error_cases() -> [(DomainError, StatusCode, &'static str); 11] {
+    fn non_validation_error_cases() -> Vec<(DomainError, StatusCode, &'static str)> {
+        let mut cases = family_non_validation_cases();
+        cases.extend(sprint_3_account_category_error_cases());
+        cases.extend(sprint_3_tx_idempotency_error_cases());
+        cases
+    }
+
+    fn family_non_validation_cases() -> Vec<(DomainError, StatusCode, &'static str)> {
         use DomainError as E;
         use StatusCode as S;
-        let (user_id, family_id, member_id) =
-            (UserId::new_v4(), FamilyId::new_v4(), MemberId::new_v4());
-        [
+        let (uid, fid, mid) = (UserId::new_v4(), FamilyId::new_v4(), MemberId::new_v4());
+        vec![
             (
                 E::InsufficientRole { role: Role::Child },
                 S::FORBIDDEN,
                 "INSUFFICIENT_ROLE",
             ),
             (
-                E::UserNotInFamily { user_id },
+                E::UserNotInFamily { user_id: uid },
                 S::FORBIDDEN,
                 "USER_NOT_IN_FAMILY",
             ),
             (
-                E::FamilyNotFound { family_id },
+                E::FamilyNotFound { family_id: fid },
                 S::NOT_FOUND,
                 "FAMILY_NOT_FOUND",
             ),
             (
-                E::MemberNotFound { member_id },
+                E::MemberNotFound { member_id: mid },
                 S::NOT_FOUND,
                 "MEMBER_NOT_FOUND",
             ),
@@ -260,7 +305,7 @@ mod tests {
             (E::TokenExpired, S::GONE, "TOKEN_EXPIRED"),
             (E::TokenAlreadyUsed, S::CONFLICT, "TOKEN_ALREADY_USED"),
             (
-                E::MemberAlreadyExists { user_id },
+                E::MemberAlreadyExists { user_id: uid },
                 S::CONFLICT,
                 "MEMBER_ALREADY_EXISTS",
             ),
@@ -269,48 +314,112 @@ mod tests {
         ]
     }
 
-    fn validation_error_cases() -> [(DomainError, &'static str); 7] {
+    fn sprint_3_account_category_error_cases() -> Vec<(DomainError, StatusCode, &'static str)> {
+        use DomainError as E;
+        use StatusCode as S;
+        let (aid, cid) = (AccountId::new_v4(), CategoryId::new_v4());
+        vec![
+            (E::AccountNotFound { account_id: aid }, S::NOT_FOUND, "ACCOUNT_NOT_FOUND"),
+            (E::AccountDeleted { account_id: aid }, S::GONE, "ACCOUNT_DELETED"),
+            (E::CategoryNotFound { category_id: cid }, S::NOT_FOUND, "CATEGORY_NOT_FOUND"),
+            (E::CategoryDeleted { category_id: cid }, S::GONE, "CATEGORY_DELETED"),
+            (
+                E::CannotModifySystemCategory { category_id: cid },
+                S::CONFLICT,
+                "CANNOT_MODIFY_SYSTEM_CATEGORY",
+            ),
+        ]
+    }
+
+    fn sprint_3_tx_idempotency_error_cases() -> Vec<(DomainError, StatusCode, &'static str)> {
+        use DomainError as E;
+        use StatusCode as S;
+        let tid = TransactionId::now_v7();
+        vec![
+            (
+                E::TransactionNotFound { transaction_id: tid },
+                S::NOT_FOUND,
+                "TRANSACTION_NOT_FOUND",
+            ),
+            (
+                E::TransactionDeleted { transaction_id: tid },
+                S::GONE,
+                "TRANSACTION_DELETED",
+            ),
+            (
+                E::TransactionAlreadyAmended { transaction_id: tid },
+                S::CONFLICT,
+                "TRANSACTION_ALREADY_AMENDED",
+            ),
+            (
+                E::IdempotencyConflict { idempotency_key: Uuid::new_v4() },
+                S::CONFLICT,
+                "IDEMPOTENCY_CONFLICT",
+            ),
+        ]
+    }
+
+    fn validation_error_cases() -> Vec<(DomainError, &'static str)> {
+        let mut cases = base_validation_cases();
+        cases.extend(sprint_3_account_category_validation_cases());
+        cases.extend(sprint_3_ledger_validation_cases());
+        cases
+    }
+
+    fn base_validation_cases() -> Vec<(DomainError, &'static str)> {
         use DomainError as E;
         let expected = CurrencyCode::try_new("USD").unwrap();
         let actual = CurrencyCode::try_new("EUR").unwrap();
         let neg = Money::from_str_parts("-1.00", "USD").unwrap_err();
-        let reason = |msg: &str| msg.to_owned();
-        [
-            (
-                E::CurrencyMismatch { expected, actual },
-                "CURRENCY_MISMATCH",
-            ),
+        let r = |msg: &str| msg.to_owned();
+        vec![
+            (E::CurrencyMismatch { expected, actual }, "CURRENCY_MISMATCH"),
             (neg, "NEGATIVE_AMOUNT"),
             (
-                E::ArithmeticOverflow {
-                    operation: "money addition",
+                E::NonPositiveAmount {
+                    amount: Money::from_str_parts("0", "USD").unwrap().amount(),
                 },
-                "ARITHMETIC_OVERFLOW",
+                "NON_POSITIVE_AMOUNT",
             ),
+            (E::ArithmeticOverflow { operation: "money addition" }, "ARITHMETIC_OVERFLOW"),
+            (E::InvalidCurrencyCode { reason: r("3 chars") }, "INVALID_CURRENCY_CODE"),
+            (E::InvalidEmail { reason: r("bad") }, "INVALID_EMAIL"),
+            (E::InvalidRelationship { reason: r("empty") }, "INVALID_RELATIONSHIP"),
+            (E::InvalidInviteTtl { reason: r("<= 0") }, "INVALID_INVITE_TTL"),
+        ]
+    }
+
+    fn sprint_3_account_category_validation_cases() -> Vec<(DomainError, &'static str)> {
+        use DomainError as E;
+        let r = |msg: &str| msg.to_owned();
+        vec![
+            (E::InvalidYearMonth { reason: r("bad") }, "INVALID_YEAR_MONTH"),
+            (E::InvalidHexColor { reason: r("bad") }, "INVALID_HEX_COLOR"),
+            (E::InvalidAccountName { reason: r("bad") }, "INVALID_ACCOUNT_NAME"),
+            (E::InvalidBankName { reason: r("bad") }, "INVALID_BANK_NAME"),
+            (E::InvalidLastFour { reason: r("bad") }, "INVALID_LAST_FOUR"),
+            (E::CreditLimitNotAllowed { kind: AccountKind::Cash }, "CREDIT_LIMIT_NOT_ALLOWED"),
+            (E::InvalidCategoryName { reason: r("bad") }, "INVALID_CATEGORY_NAME"),
+            (E::InvalidCategoryIcon { reason: r("bad") }, "INVALID_CATEGORY_ICON"),
+        ]
+    }
+
+    fn sprint_3_ledger_validation_cases() -> Vec<(DomainError, &'static str)> {
+        use DomainError as E;
+        let r = |msg: &str| msg.to_owned();
+        vec![
+            (E::InvalidTag { reason: r("bad") }, "INVALID_TAG"),
+            (E::TooManyTags { max: 20 }, "TOO_MANY_TAGS"),
+            (E::InvalidDescription { reason: r("bad") }, "INVALID_DESCRIPTION"),
             (
-                E::InvalidCurrencyCode {
-                    reason: reason("must be 3 chars"),
-                },
-                "INVALID_CURRENCY_CODE",
+                E::CategoryKindMismatch { expected: "expense".into(), actual: "income".into() },
+                "CATEGORY_KIND_MISMATCH",
             ),
-            (
-                E::InvalidEmail {
-                    reason: reason("invalid"),
-                },
-                "INVALID_EMAIL",
-            ),
-            (
-                E::InvalidRelationship {
-                    reason: reason("empty"),
-                },
-                "INVALID_RELATIONSHIP",
-            ),
-            (
-                E::InvalidInviteTtl {
-                    reason: reason("must be > 0"),
-                },
-                "INVALID_INVITE_TTL",
-            ),
+            (E::CannotAmendReversal, "CANNOT_AMEND_REVERSAL"),
+            (E::SameAccountTransfer { account_id: AccountId::new_v4() }, "SAME_ACCOUNT_TRANSFER"),
+            (E::InvalidCashWithdrawalAccounts, "INVALID_CASH_WITHDRAWAL_ACCOUNTS"),
+            (E::CrossCurrencyDestinationRequired, "CROSS_CURRENCY_DESTINATION_REQUIRED"),
+            (E::SameCurrencyDestinationForbidden, "SAME_CURRENCY_DESTINATION_FORBIDDEN"),
         ]
     }
 

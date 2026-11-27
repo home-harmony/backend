@@ -170,7 +170,7 @@ async fn reactivated_member_round_trips_preserving_id_and_updating_role_and_perm
     assert_eq!(
         (access.role, access.permissions),
         (
-            Role::Other,
+            Role::Guest,
             vec![Permission::ViewBudget, Permission::ViewLoans]
         )
     );
@@ -190,7 +190,7 @@ async fn role_change_and_member_removal_persist_across_reload_and_auth_queries()
     let perms_for_op = new_perms.clone();
     repo.update(family.id(), TokenScope::None, move |fam| {
         let events =
-            fam.change_member_role(owner_uid, member_id, Role::Other, perms_for_op.clone())?;
+            fam.change_member_role(owner_uid, member_id, Role::Guest, perms_for_op.clone())?;
         Ok(((), events))
     })
     .await?;
@@ -198,7 +198,8 @@ async fn role_change_and_member_removal_persist_across_reload_and_auth_queries()
         .find_active_membership(family.id(), member_uid)
         .await?
         .context("updated member should remain active")?;
-    assert_eq!((access.role, access.permissions), (Role::Other, new_perms));
+    assert_eq!(access.member_id, member_id);
+    assert_eq!((access.role, access.permissions), (Role::Guest, new_perms));
 
     repo.update(family.id(), TokenScope::None, move |fam| {
         let events = fam.remove_member(owner_uid, member_id)?;
@@ -425,7 +426,7 @@ fn build_family_with_other_member() -> Result<(Family, UserId, InviteTokenId)> {
 
     let (invite, _) = family.create_invite_at(
         owner_uid,
-        Role::Other,
+        Role::Guest,
         vec![Permission::ViewBudget, Permission::ViewReports],
         Some(Relationship::try_new("Grandma")?),
         InviteTtl::from_hours(48)?,
@@ -455,7 +456,7 @@ fn assert_loaded_family_and_invite(
     let loaded_invite = &loaded.invite_tokens()[0];
     assert!(loaded_invite.token_hash().matches_token(invite_token));
     assert!(loaded_invite.is_used());
-    assert_eq!(loaded_invite.role(), Role::Other);
+    assert_eq!(loaded_invite.role(), Role::Guest);
     assert_eq!(
         loaded_invite.permissions(),
         &[Permission::ViewBudget, Permission::ViewReports]
@@ -474,7 +475,7 @@ fn assert_loaded_other_member(loaded: &Family, other_uid: UserId) -> Result<()> 
         .find(|m| m.user_id() == other_uid)
         .context("other member should exist")?;
     assert_eq!(other_member.display_name().as_str(), "Nana");
-    assert_eq!(other_member.role(), Role::Other);
+    assert_eq!(other_member.role(), Role::Guest);
     assert_eq!(
         other_member.permissions(),
         &[Permission::ViewBudget, Permission::ViewReports]
@@ -631,7 +632,7 @@ fn assert_reactivated_member(
         .context("reactivated member should exist")?;
     assert_eq!(member.id(), original_member_id);
     assert!(member.is_active());
-    assert_eq!(member.role(), Role::Other);
+    assert_eq!(member.role(), Role::Guest);
     assert_eq!(member.display_name().as_str(), "Reactivated");
     assert_eq!(
         member.permissions(),
@@ -656,7 +657,7 @@ async fn reactivate_member_as_other(
         .update(family_id, TokenScope::None, move |fam| {
             let (inv, events) = fam.create_invite(
                 owner_uid,
-                Role::Other,
+                Role::Guest,
                 vec![Permission::ViewBudget, Permission::ViewLoans],
                 Some(Relationship::try_new("Aunt")?),
                 InviteTtl::from_hours(48)?,
@@ -713,7 +714,7 @@ async fn assert_soft_deleted_member_persisted(
         .context("soft-deleted member row must be retained")?;
     assert!(!removed.is_active());
     assert!(removed.deleted_at().is_some());
-    assert_eq!(removed.role(), Role::Other);
+    assert_eq!(removed.role(), Role::Guest);
     assert_eq!(
         removed.permissions(),
         &[Permission::ViewBudget, Permission::ViewReports]
